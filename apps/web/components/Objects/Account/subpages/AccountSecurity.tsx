@@ -29,6 +29,8 @@ import { getUriWithoutOrg, getAPIUrl } from '@services/config/config'
 import { RequestBodyWithAuthHeader, getResponseMetadata } from '@services/utils/ts/requests'
 import * as Yup from 'yup'
 import { useTranslation } from 'react-i18next'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import AccountDangerZone from '@components/Objects/Account/subpages/AccountDangerZone'
 
 const validationSchema = Yup.object().shape({
@@ -229,7 +231,10 @@ function TwoFactorAuthSection() {
   }
 
   const downloadBackupCodes = () => {
-    const header = t('user.settings.security.mfa.codes_file_header', {
+    // Rescue Ready fork: the translated header names LearnHouse; neutral in white-label.
+    const header = RR_WHITE_LABEL
+      ? 'Two-factor backup codes. Each code can be used once.'
+      : t('user.settings.security.mfa.codes_file_header', {
       defaultValue: 'LearnHouse two-factor backup codes. Each code can be used once.',
     })
     const blob = new Blob([`${header}\n\n${backupCodes.join('\n')}\n`], {
@@ -238,7 +243,8 @@ function TwoFactorAuthSection() {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = 'learnhouse-backup-codes.txt'
+    // Rescue Ready fork: neutral file name in white-label.
+    link.download = RR_WHITE_LABEL ? 'backup-codes.txt' : 'learnhouse-backup-codes.txt'
     document.body.appendChild(link)
     link.click()
     link.remove()
