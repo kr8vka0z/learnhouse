@@ -139,10 +139,15 @@ async def _course_activities(db: AsyncSession, course_id: int) -> list[tuple]:
 
 def _attempts(events: Iterable[UserAuditEvent], zone: ZoneInfo) -> tuple[list[dict], datetime | None]:
     """Attempt history from audit rows (oldest first). The latest GRADED row per
-    attempt wins (a teacher regrade replaces the earlier grade); first passed is
-    the earliest GRADED row that passed."""
+    attempt wins (a teacher regrade replaces the earlier grade).
+
+    First passed is worked out from each attempt's FINAL grade, so it can never
+    contradict the attempt results: the earliest attempt whose final grade passed,
+    dated when that attempt started passing without a later failing grade in
+    between (a pass->fail regrade clears it; a pass->pass regrade keeps the
+    original date; a fail->pass regrade dates from the regrade)."""
     by_attempt: dict[int, dict] = {}
-    first_passed: datetime | None = None
+    passing_since: dict[int, datetime | None] = {}
     for ev in sorted(events, key=lambda e: (parse_timestamp(e.created_at), e.id or 0)):
         meta = ev.audit_metadata or {}
         try:
@@ -161,9 +166,14 @@ def _attempts(events: Iterable[UserAuditEvent], zone: ZoneInfo) -> tuple[list[di
             a["score_pct"] = round(float(pct), 1) if pct is not None else None
             a["passed"] = bool(meta.get("passed")) if meta.get("passed") is not None else None
             a["graded_at"] = at
-            if meta.get("passed") and first_passed is None:
-                first_passed = at
-    return [by_attempt[k] for k in sorted(by_attempt)], first_passed
+            passing_since[n] = (passing_since.get(n) or at) if a["passed"] else None
+    attempts = [by_attempt[k] for k in sorted(by_attempt)]
+    first_passed = next(
+        (passing_since[a["attempt_number"]] for a in attempts
+         if passing_since.get(a["attempt_number"])),
+        None,
+    )
+    return attempts, first_passed
 
 
 async def build_completion_report(

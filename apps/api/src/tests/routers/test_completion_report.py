@@ -281,6 +281,34 @@ class TestReportContent:
                     if r["activity_name"] == "Safety quiz")
         assert quiz["first_passed_at"] == early.astimezone(DENVER)
 
+    @pytest.mark.parametrize("grades, expected_day", [
+        ([(1, True), (2, False)], None),            # pass -> fail regrade clears it
+        ([(1, False), (2, True)], 2),               # fail -> pass regrade dates from the regrade
+        ([(1, True), (2, True)], 1),                # pass -> pass keeps the original date
+        ([(1, True), (2, False), (3, True)], 3),    # passing again restarts the date
+    ])
+    async def test_teacher_regrade_of_one_attempt_drives_first_passed(
+        self, db, mock_request, org, course, regular_user, structure, real_audit_writes,
+        grades, expected_day,
+    ):
+        """First passed must agree with the attempt's FINAL grade on an official
+        record. Fixed timestamps, so the graded rows are inserted directly."""
+        with _side_channels():
+            await add_activity_to_trail(mock_request, regular_user, "activity_21", db)
+        for day, passed in grades:
+            db.add(UserAuditEvent(
+                event_type=UserAuditEventType.ASSIGNMENT_GRADED, user_id=regular_user.id,
+                org_id=org.id, target_uuid="assignment_safety",
+                created_at=datetime(2026, 3, day, 15, 0, tzinfo=UTC),
+                audit_metadata={"percentage": 80.0 if passed else 30.0, "passed": passed, "attempt_number": 1},
+            ))
+        await db.commit()
+        quiz = next(r for r in (await _report(db, regular_user.id, org, course))["rows"]
+                    if r["activity_name"] == "Safety quiz")
+        assert [a["passed"] for a in quiz["attempts"]] == [grades[-1][1]]
+        expected = None if expected_day is None else datetime(2026, 3, expected_day, 15, 0, tzinfo=UTC).astimezone(DENVER)
+        assert quiz["first_passed_at"] == expected
+
     async def test_not_enrolled_returns_none(self, db, org, course, regular_user, structure):
         assert await _report(db, regular_user.id, org, course) is None
 
