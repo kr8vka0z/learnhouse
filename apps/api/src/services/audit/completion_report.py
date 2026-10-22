@@ -29,8 +29,8 @@ import html
 import io
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlmodel import select
@@ -78,7 +78,7 @@ def display_zone() -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def parse_timestamp(value) -> Optional[datetime]:
+def parse_timestamp(value) -> datetime | None:
     """Datetime or stored string -> aware datetime. Naive means UTC (see module
     docstring; SQLite also hands timestamptz columns back naive). Blank or unparseable -> None: one bad legacy string must not
     break an official export."""
@@ -95,20 +95,20 @@ def parse_timestamp(value) -> Optional[datetime]:
         except ValueError:
             logger.warning("Unparseable timestamp in completion report: %r", text)
             return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-def to_display(value, zone: ZoneInfo) -> Optional[datetime]:
+def to_display(value, zone: ZoneInfo) -> datetime | None:
     dt = parse_timestamp(value)
     return dt.astimezone(zone) if dt else None
 
 
-def _fmt_local(dt: Optional[datetime]) -> str:
+def _fmt_local(dt: datetime | None) -> str:
     # Spreadsheet-parseable; the zone is named in the column header.
     return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
-def _fmt_iso(dt: Optional[datetime]) -> Optional[str]:
+def _fmt_iso(dt: datetime | None) -> str | None:
     return dt.isoformat(timespec="seconds") if dt else None
 
 
@@ -137,12 +137,12 @@ async def _course_activities(db: AsyncSession, course_id: int) -> list[tuple]:
     return out
 
 
-def _attempts(events: Iterable[UserAuditEvent], zone: ZoneInfo) -> tuple[list[dict], Optional[datetime]]:
+def _attempts(events: Iterable[UserAuditEvent], zone: ZoneInfo) -> tuple[list[dict], datetime | None]:
     """Attempt history from audit rows (oldest first). The latest GRADED row per
     attempt wins (a teacher regrade replaces the earlier grade); first passed is
     the earliest GRADED row that passed."""
     by_attempt: dict[int, dict] = {}
-    first_passed: Optional[datetime] = None
+    first_passed: datetime | None = None
     for ev in sorted(events, key=lambda e: (parse_timestamp(e.created_at), e.id or 0)):
         meta = ev.audit_metadata or {}
         try:
@@ -168,7 +168,7 @@ def _attempts(events: Iterable[UserAuditEvent], zone: ZoneInfo) -> tuple[list[di
 
 async def build_completion_report(
     db: AsyncSession, *, user_id: int, org_id: int, course: Course
-) -> Optional[dict]:
+) -> dict | None:
     """Completion report for one student in one course, or None when the student
     is not enrolled. Caller enforces permissions and that ``course`` is in
     ``org_id``. Datetimes in the result are aware, in the display zone."""
@@ -210,7 +210,7 @@ async def build_completion_report(
     for ev in events:
         by_target.setdefault(ev.target_uuid or "", []).append(ev)
 
-    def latest(target: str, event_type: str) -> Optional[datetime]:
+    def latest(target: str, event_type: str) -> datetime | None:
         times = [parse_timestamp(e.created_at) for e in by_target.get(target, []) if e.event_type == event_type]
         times = [t for t in times if t]
         return max(times).astimezone(zone) if times else None
@@ -256,7 +256,7 @@ async def build_completion_report(
     return {
         "schema": "completion_report/1",
         "timezone": zone.key,
-        "generated_at": datetime.now(timezone.utc).astimezone(zone),
+        "generated_at": datetime.now(UTC).astimezone(zone),
         "student": {
             "id": user.id,
             "name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
@@ -296,7 +296,7 @@ def report_to_json(report: dict) -> dict:
     return conv(report)
 
 
-def _yes_no(v: Optional[bool]) -> str:
+def _yes_no(v: bool | None) -> str:
     return "" if v is None else ("yes" if v else "no")
 
 
@@ -372,7 +372,7 @@ def bulk_csv_rows(report: dict) -> str:
 
 def render_student_html(report: dict) -> str:
     """Printable view: static HTML, every value escaped, no scripts."""
-    e = lambda v: html.escape("" if v is None else str(v))  # noqa: E731
+    e = lambda v: html.escape("" if v is None else str(v))
     head = "".join(f"<tr><th>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in _header_pairs(report))
     cols = "".join(f"<th>{e(c)}</th>" for c in table_columns(report["timezone"]))
     body = "".join(

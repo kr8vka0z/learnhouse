@@ -10,7 +10,7 @@ certificates, RBAC/reader gates owned by other code) are patched.
 import csv
 import io
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
@@ -268,8 +268,8 @@ class TestReportContent:
         are inserted directly here only because the test needs fixed timestamps."""
         with _side_channels():
             await add_activity_to_trail(mock_request, regular_user, "activity_21", db)
-        early = datetime(2026, 3, 1, 15, 0, tzinfo=timezone.utc)
-        late = datetime(2026, 3, 5, 15, 0, tzinfo=timezone.utc)
+        early = datetime(2026, 3, 1, 15, 0, tzinfo=UTC)
+        late = datetime(2026, 3, 5, 15, 0, tzinfo=UTC)
         for when, attempt in ((early, 1), (late, 2)):
             db.add(UserAuditEvent(
                 event_type=UserAuditEventType.ASSIGNMENT_GRADED, user_id=regular_user.id,
@@ -295,7 +295,7 @@ class TestTimeZone:
         assert got == datetime(2026, 10, 21, 19, 27, 38, 444103, tzinfo=DENVER)
 
     def test_aware_datetime_is_converted_not_relabelled(self):
-        aware = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+        aware = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
         got = cr.to_display(aware, DENVER)
         assert (got.hour, got.utcoffset().total_seconds()) == (5, -7 * 3600)
 
