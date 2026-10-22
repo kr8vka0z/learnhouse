@@ -15,7 +15,8 @@ The fork runs in OSS mode (no `ee/` folders). We do not fake EE mode or edit `EE
 - **Sequential chapter gating.** A course setting (`Course.extra_metadata.rr_sequential_chapters`) locks each chapter until the previous one is finished. All of the logic is in `services/courses/sequential.py`.
 - **Pass-only assignment completion.** An assignment counts as complete only when passed, via `_rr_sync_assignment_completion` in `services/courses/activities/assignments.py`. Every attempt is kept in the audit history, and an instructor can grant a student one more attempt.
 - **Video auto-complete.** A video that plays to the end marks its activity complete.
-- **Coming:** an essay task type.
+- **Essay questions.** An essay is a `CUSTOM` assignment task with `contents.kind == "essay"` (no new task-type enum value, so no migration). It is never auto-graded; an instructor grades it by hand. Optional word limits and a size ceiling are enforced at hand-in (`services/courses/activities/essay.py`). The model answer is stored in `contents.explanation`, so students see it only after grading and only when the assignment shows correct answers.
+- **Out-of-attempts notice.** A student who failed and has no attempts left is told to ask the instructor for another (`apps/web/lib/assignments/retryState.ts`).
 
 Every edit to an upstream file carries a `Rescue Ready fork:` marker comment, so `grep -rn "Rescue Ready fork" apps` lists everything we changed.
 
