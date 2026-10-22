@@ -60,29 +60,64 @@ async def record_audit_event(
     if not user_id:
         return
 
-    try:
-        # Imported lazily so this module is importable without booting the engine
-        # (e.g. during unit tests that patch the factory).
-        from src.core.events.database import _async_session_factory
+    # Rescue Ready fork: one retry, then an ERROR line carrying the whole event so
+    # it can be re-inserted by hand. The audit row is the school's official
+    # record, and a transient connection blip used to drop it with only the
+    # event type logged. Joining the caller's transaction instead was rejected:
+    # every caller commits its action before emitting the event (often across
+    # several commits), so atomicity would mean reordering each upstream call
+    # site. A retry after a commit whose acknowledgement was lost can write the
+    # row twice; for an append-only log a duplicate beats a gap.
+    for attempt in (1, 2):
+        try:
+            # Imported lazily so this module is importable without booting the engine
+            # (e.g. during unit tests that patch the factory).
+            from src.core.events.database import _async_session_factory
 
-        async with _async_session_factory() as session:
-            session.add(
-                UserAuditEvent(
-                    event_type=event_type,
-                    user_id=user_id,
-                    org_id=org_id,
-                    ip=ip,
-                    user_agent=user_agent,
-                    target_uuid=target_uuid,
-                    audit_metadata=metadata or {},
+            async with _async_session_factory() as session:
+                session.add(
+                    UserAuditEvent(
+                        event_type=event_type,
+                        user_id=user_id,
+                        org_id=org_id,
+                        ip=ip,
+                        user_agent=user_agent,
+                        target_uuid=target_uuid,
+                        audit_metadata=metadata or {},
+                    )
                 )
+                await session.commit()
+            return
+        except Exception:
+            if attempt == 1:
+                logger.warning(
+                    "Audit event %s for user %s failed to write; retrying once",
+                    event_type, user_id, exc_info=True,
+                )
+                continue
+            logger.error(
+                "Failed to record audit event %s for user %s (org %s); audit data lost. "
+                "Event for manual re-entry: %s",
+                event_type,
+                user_id,
+                org_id,
+                _event_for_log(event_type, user_id, org_id, ip, user_agent, target_uuid, metadata),
+                exc_info=True,
             )
-            await session.commit()
+
+
+def _event_for_log(event_type, user_id, org_id, ip, user_agent, target_uuid, metadata) -> str:
+    """JSON of a lost audit event, capped so one huge answer can't flood the log."""
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        text = json.dumps({
+            "event_type": event_type, "user_id": user_id, "org_id": org_id,
+            "ip": ip, "user_agent": user_agent, "target_uuid": target_uuid,
+            "metadata": metadata or {},
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        }, default=str)
     except Exception:
-        logger.error(
-            "Failed to record audit event %s for user %s (org %s); audit data lost",
-            event_type,
-            user_id,
-            org_id,
-            exc_info=True,
-        )
+        text = repr((event_type, user_id, org_id, target_uuid, metadata))
+    return text[:8000]
