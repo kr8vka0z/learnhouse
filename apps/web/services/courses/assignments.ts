@@ -344,6 +344,21 @@ export async function markActivityAsDoneForUser(
   return res
 }
 
+// Rescue Ready fork: instructor gives a student who failed every allowed
+// attempt one more try (completion now requires a pass).
+export async function grantAssignmentAttempt(
+  user_id: string,
+  assignmentUUID: string,
+  access_token: string
+) {
+  const result: any = await fetch(
+    `${getAPIUrl()}assignments/${assignmentUUID}/submissions/${user_id}/grant-attempt`,
+    RequestBodyWithAuthHeader('POST', null, null, access_token)
+  )
+  const res = await getResponseMetadata(result)
+  return res
+}
+
 export async function getAssignmentsFromACourse(
   courseUUID: string,
   access_token: string

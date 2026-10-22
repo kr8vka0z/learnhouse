@@ -3103,6 +3103,12 @@ async def create_assignment_submission(
                 "course_uuid": course.course_uuid,
                 "course_name": course.name,
                 "attempt_number": submitted_attempt_number,
+                # Rescue Ready fork: snapshot this attempt's answers. A retry
+                # deletes the task submissions, so without this only the grade
+                # of an earlier attempt survived, never what the student wrote.
+                "tasks": await _rr_snapshot_task_answers(
+                    assignment.id, int(submitter.id), db_session
+                ),
             },
         )
         await dispatch_webhooks(
@@ -3172,12 +3178,11 @@ async def create_assignment_submission(
     )
     trailstep = (await db_session.execute(statement)).scalars().first()
 
-    # Whether this submission is what completes the activity (a brand-new step,
-    # or a step that was incomplete, e.g. after a retry). Used below to fire
-    # COURSE_COMPLETED only on a genuine transition, never on a plain resubmit of
-    # an already-complete activity.
-    is_new_activity_completion = (trailstep is None) or (not trailstep.complete)
-
+    # Rescue Ready fork: handing an assignment in no longer completes it; only a
+    # passing grade does (see _rr_sync_assignment_completion). The step is still
+    # created here, incomplete, so the learner shows as started and the
+    # instructor "mark as done" override has a row to flip. An existing step is
+    # left alone (a retry already reset it).
     if not trailstep:
         trailstep = TrailStep(
             trailrun_id=trailrun.id if trailrun.id is not None else 0,
@@ -3185,24 +3190,13 @@ async def create_assignment_submission(
             course_id=course.id if course.id is not None else 0,
             trail_id=trail.id if trail.id is not None else 0,
             org_id=course.org_id,
-            complete=True,
+            complete=False,
             teacher_verified=False,
             grade="",
             user_id=user.id, # type: ignore
             creation_date=str(datetime.now()),
             update_date=str(datetime.now()),
         )
-        db_session.add(trailstep)
-        await db_session.commit()
-        await db_session.refresh(trailstep)
-    else:
-        # Existing trail step, either from prior progress saves, or because
-        # the student just hit "Try again" (the retry endpoint flipped it to
-        # incomplete). Re-flip it to complete now that the assignment is
-        # back in SUBMITTED state. The first-submission branch above sets
-        # complete=True; this keeps the reuse path consistent.
-        trailstep.complete = True
-        trailstep.update_date = str(datetime.now())
         db_session.add(trailstep)
         await db_session.commit()
         await db_session.refresh(trailstep)
@@ -3241,14 +3235,18 @@ async def create_assignment_submission(
                 auto_graded=True,
                 # Reuse the list fetched just above for the auto-gradable check.
                 assignment_tasks=assignment_tasks,
+                # Rescue Ready fork: completion is set inside grading, on a pass.
+                request=request,
             )
-            # Ensure trailstep reflects completion (create_assignment_submission
-            # above already created it with complete=True, but if one already
-            # existed from a previous state we make sure it's marked done).
-            trailstep.complete = True
-            trailstep.update_date = str(datetime.now())
-            db_session.add(trailstep)
-            await db_session.commit()
+
+    # Rescue Ready fork: a formative (ungraded) assignment can never be graded,
+    # so it can never "pass". Handing it in completes it, mirroring how
+    # are_course_assignments_passed already treats it for the certificate.
+    if assignment.ungraded:
+        await _rr_sync_assignment_completion(
+            request, assignment, course, int(user.id), True,
+            submitted_attempt_number, db_session, source="submission",
+        )
 
     # Check if all activities in the course are completed and create certificate
     # if so. Wrapped defensively: the submission is already committed above, so a
@@ -3274,42 +3272,9 @@ async def create_assignment_submission(
                 user.id,
             )
 
-        # Fire COURSE_COMPLETED when THIS submission finished the course. Assignment
-        # activities don't go through the trail's mark-activity-done flow, so
-        # without this the event/analytics never fire when the final activity is an
-        # assignment. Gated on a genuine activity-completion transition so a plain
-        # resubmit of an already-complete activity doesn't re-fire it.
-        if is_new_activity_completion:
-            try:
-                if course_complete:
-                    await track(
-                        event_name=analytics_events.COURSE_COMPLETED,
-                        org_id=course.org_id,
-                        user_id=user.id,
-                        properties={"course_uuid": course.course_uuid},
-                    )
-                    await dispatch_webhooks(
-                        event_name=analytics_events.COURSE_COMPLETED,
-                        org_id=course.org_id,
-                        data={
-                            "user": {
-                                "user_uuid": user.user_uuid,
-                                "email": user.email,
-                                "username": user.username,
-                            },
-                            "course": {
-                                "course_uuid": course.course_uuid,
-                                "name": course.name,
-                            },
-                        },
-                    )
-            except Exception:  # pragma: no cover - defensive: dispatch errors never fail submit
-                logger.exception(
-                    "COURSE_COMPLETED dispatch failed after assignment submission "
-                    "(assignment %s, user %s); submission is saved.",
-                    assignment.assignment_uuid,
-                    user.id,
-                )
+        # Rescue Ready fork: COURSE_COMPLETED used to fire here on submission.
+        # It now fires from _rr_sync_assignment_completion, only when a pass
+        # (or a formative hand-in) actually completes the activity.
 
     # return assignment user submission read
     return AssignmentUserSubmissionRead.model_validate(assignment_user_submission)
@@ -3848,6 +3813,7 @@ async def _apply_grade_and_finalize(
     auto_graded: bool = False,
     dispatch_webhook: bool = True,
     assignment_tasks: Sequence[AssignmentTask] | None = None,
+    request: Request | None = None,
 ) -> dict:
     """
     Core grading logic shared by manual and auto-grade flows. Computes the
@@ -4009,7 +3975,22 @@ async def _apply_grade_and_finalize(
             "passed": computed["passed"],
             "attempt_number": int(assignment_user_submission.attempt_number or 1),
             "auto_graded": auto_graded,
+            # Rescue Ready fork: per-task score/correctness for this attempt.
+            # The answers themselves sit on the matching ASSIGNMENT_SUBMITTED
+            # row (same attempt_number); repeating them here would copy every
+            # learner's answers again on each bulk regrade after a task edit.
+            "tasks": _rr_task_scores(computed["tasks"]),
         },
+    )
+
+    # Rescue Ready fork: an assignment is complete only once it is passed. This
+    # is the one choke point every grade goes through (auto-grade on submit,
+    # manual grade, bulk regrade after a task edit), so completion follows the
+    # grade on all of them, including a regrade that drops below the threshold.
+    await _rr_sync_assignment_completion(
+        request, assignment, course, user_id, bool(computed["passed"]),
+        int(assignment_user_submission.attempt_number or 1), db_session,
+        source="auto_grade" if auto_graded else "manual_grade",
     )
 
     if dispatch_webhook:
@@ -4105,6 +4086,7 @@ async def grade_assignment_submission(
         db_session=db_session,
         overall_feedback=overall_feedback,
         auto_graded=False,
+        request=request,  # Rescue Ready fork: lets a pass issue the certificate
     )
 
     # Grading this submission may have made the course fully passed (e.g. the
@@ -4297,14 +4279,13 @@ async def mark_activity_as_done_for_user(
             detail="User not enrolled in the course",
         )
 
-    # Mark activity as done
-    trailstep.complete = True
-    trailstep.update_date = str(datetime.now())
-
-    # Insert TrailStep in DB
-    db_session.add(trailstep)
-    await db_session.commit()
-    await db_session.refresh(trailstep)
+    # Rescue Ready fork: the instructor override goes through the same
+    # completion path as a pass, so it leaves an activity_completed audit row
+    # (marked source="instructor") and fires COURSE_COMPLETED on a transition.
+    await _rr_sync_assignment_completion(
+        request, assignment, course, user_id, True, None, db_session,
+        source="instructor",
+    )
 
     # Check if all activities in the course are completed and create certificate if so
     if course and course.id:
@@ -4388,3 +4369,368 @@ async def get_assignments_from_course(
             )
         )
     return results
+
+
+## > Rescue Ready fork: completion = passed, attempt history, granted attempts
+#
+# Kept as one additive block at the end of the file so upstream merges only
+# meet the small call-site edits marked "Rescue Ready fork" above.
+
+# Per-task cap on a snapshotted answer, in characters of JSON. Answers are short
+# text/choices; anything bigger (a pasted essay, a long code task) is replaced
+# by a marker so one attempt can't bloat the audit table.
+# ponytail: a flat cap, not a smart trim; raise it if long-form answers matter.
+_RR_ANSWER_SNAPSHOT_MAX_CHARS = 8000
+
+
+def _rr_cap_answer(answer):
+    """Return ``answer`` unchanged if small, else a size marker."""
+    import json
+
+    try:
+        size = len(json.dumps(answer, default=str))
+    except Exception:
+        return {"_unserializable": True}
+    if size > _RR_ANSWER_SNAPSHOT_MAX_CHARS:
+        return {"_truncated": True, "size_chars": size}
+    return answer
+
+
+async def _rr_snapshot_task_answers(
+    assignment_id: int | None, user_id: int, db_session: AsyncSession
+) -> list[dict]:
+    """Per-task answers of the attempt being handed in, for the audit row.
+
+    File-submission tasks store only the uploaded file's uuid in
+    ``task_submission``, so the snapshot holds a reference, never file content.
+    """
+    tasks = (await db_session.execute(
+        select(AssignmentTask).where(AssignmentTask.assignment_id == assignment_id)
+    )).scalars().all()
+    task_ids = [t.id for t in tasks if t.id is not None]
+    by_task: dict = {}
+    if task_ids:
+        for ts in (await db_session.execute(
+            select(AssignmentTaskSubmission).where(
+                AssignmentTaskSubmission.user_id == user_id,
+                AssignmentTaskSubmission.assignment_task_id.in_(task_ids),  # type: ignore[attr-defined]
+            )
+        )).scalars().all():
+            by_task[ts.assignment_task_id] = ts
+    snapshot = []
+    for task in sorted(tasks, key=lambda t: (t.order is None, t.order or 0, t.id or 0)):
+        ts = by_task.get(task.id)
+        snapshot.append({
+            "task_uuid": task.assignment_task_uuid,
+            "title": task.title,
+            "type": str(getattr(task.assignment_type, "value", task.assignment_type)),
+            "answer": _rr_cap_answer(ts.task_submission) if ts else None,
+        })
+    return snapshot
+
+
+def _rr_task_scores(breakdown: list[dict]) -> list[dict]:
+    """Compact per-task score rows from ``_build_tasks_breakdown`` output."""
+    return [
+        {
+            "task_uuid": row.get("assignment_task_uuid"),
+            "grade": row.get("grade"),
+            "max_grade": row.get("max_grade"),
+            "passed": row.get("passed"),
+            "manually_graded": row.get("manually_graded"),
+        }
+        for row in breakdown
+    ]
+
+
+async def _rr_sync_assignment_completion(
+    request: Request | None,
+    assignment: Assignment,
+    course: Course,
+    user_id: int,
+    passed: bool,
+    attempt_number: int | None,
+    db_session: AsyncSession,
+    source: str,
+) -> bool:
+    """Make the assignment activity's TrailStep follow pass/fail.
+
+    ``passed`` True completes the step; False un-completes a step a previous
+    grade had completed (a regrade below the threshold). Only a real
+    incomplete -> complete transition writes the ``activity_completed`` audit
+    row and, when that finishes the course, COURSE_COMPLETED (analytics, audit,
+    webhook) plus the certificate check. Returns whether that transition
+    happened, so callers and repeat grades stay idempotent.
+
+    ``request`` is only needed to issue a certificate; bulk regrade paths pass
+    None and reconcile certificates themselves.
+    """
+    activity = (await db_session.execute(
+        select(Activity).where(Activity.id == assignment.activity_id)
+    )).scalars().first()
+    if activity is None or course.id is None:
+        return False
+
+    trailstep = (await db_session.execute(
+        select(TrailStep).where(
+            TrailStep.activity_id == activity.id,
+            TrailStep.user_id == user_id,
+        )
+    )).scalars().first()
+
+    if not passed:
+        if trailstep is not None and trailstep.complete:
+            trailstep.complete = False
+            trailstep.update_date = str(datetime.now())
+            db_session.add(trailstep)
+            await db_session.commit()
+            await sync_trailrun_status(user_id, course.id, db_session)
+        return False
+
+    if trailstep is not None and trailstep.complete:
+        return False
+
+    user = (await db_session.execute(
+        select(User).where(User.id == user_id)
+    )).scalars().first()
+    if user is None:
+        return False
+
+    if trailstep is None:
+        # Normally the submission created the step; this covers rows that
+        # predate that (or were created by another path).
+        trail = await check_trail_presence(
+            org_id=course.org_id, user_id=user_id, request=request,  # type: ignore[arg-type]
+            user=user, db_session=db_session,  # type: ignore[arg-type]
+        )
+        trailrun = (await db_session.execute(
+            select(TrailRun).where(
+                TrailRun.trail_id == trail.id,
+                TrailRun.course_id == course.id,
+                TrailRun.user_id == user_id,
+            )
+        )).scalars().first()
+        if trailrun is None:
+            trailrun = TrailRun(
+                trail_id=trail.id or 0, course_id=course.id, org_id=course.org_id,
+                user_id=user_id, creation_date=str(datetime.now()),
+                update_date=str(datetime.now()),
+            )
+            db_session.add(trailrun)
+            await db_session.commit()
+            await db_session.refresh(trailrun)
+        trailstep = TrailStep(
+            trailrun_id=trailrun.id or 0, activity_id=activity.id or 0,
+            course_id=course.id, trail_id=trail.id or 0, org_id=course.org_id,
+            complete=True, teacher_verified=False, grade="", user_id=user_id,
+            creation_date=str(datetime.now()), update_date=str(datetime.now()),
+        )
+    else:
+        trailstep.complete = True
+        trailstep.update_date = str(datetime.now())
+    db_session.add(trailstep)
+    await db_session.commit()
+
+    metadata = {
+        "course_uuid": course.course_uuid,
+        "course_name": course.name,
+        "activity_type": activity.activity_type or "",
+        "assignment_uuid": assignment.assignment_uuid,
+        "completed_by": source,
+    }
+    if attempt_number is not None:
+        metadata["attempt_number"] = attempt_number
+    await record_audit_event(
+        event_type=UserAuditEventType.ACTIVITY_COMPLETED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=activity.activity_uuid,
+        metadata=metadata,
+    )
+
+    course_complete = await is_course_fully_completed(user_id, course.id, db_session)
+    if not course_complete:
+        return True
+
+    try:
+        if request is not None:
+            await check_course_completion_and_create_certificate(
+                request, user_id, course.id, db_session, is_complete=True
+            )
+        await sync_trailrun_status(user_id, course.id, db_session, is_complete=True)
+        await track(
+            event_name=analytics_events.COURSE_COMPLETED,
+            org_id=course.org_id,
+            user_id=user_id,
+            properties={"course_uuid": course.course_uuid},
+        )
+        await record_audit_event(
+            event_type=UserAuditEventType.COURSE_COMPLETED,
+            user_id=user_id,
+            org_id=course.org_id,
+            target_uuid=course.course_uuid,
+            metadata={"course_name": course.name},
+        )
+        await dispatch_webhooks(
+            event_name=analytics_events.COURSE_COMPLETED,
+            org_id=course.org_id,
+            data={
+                "user": {
+                    "user_uuid": user.user_uuid,
+                    "email": user.email,
+                    "username": user.username,
+                },
+                "course": {"course_uuid": course.course_uuid, "name": course.name},
+            },
+        )
+    except Exception:  # pragma: no cover - defensive: never fail the grade/submit
+        logger.exception(
+            "Course-completion side effects failed after assignment %s completed "
+            "for user %s; completion is saved.",
+            assignment.assignment_uuid,
+            user_id,
+        )
+    return True
+
+
+async def grant_assignment_attempt(
+    request: Request,
+    assignment_uuid: str,
+    user_id: int,
+    current_user: PublicUser | AnonymousUser | APITokenUser,
+    db_session: AsyncSession,
+):
+    """Give one student one more attempt at a graded assignment.
+
+    With pass-only completion a student who failed every allowed attempt would
+    otherwise be stuck incomplete forever. This does what the student's own
+    "Try again" does (wipe the task answers, reopen the row as PENDING, bump
+    ``attempt_number``) but skips ``allow_retries`` / ``max_retries``, and it
+    only works when the student can no longer retry on their own, so it never
+    silently spends one of their attempts.
+
+    Same permission as grading: whoever may grade the course may grant.
+    """
+    _block_api_tokens(current_user)
+    assignment = (await db_session.execute(
+        select(Assignment).where(Assignment.assignment_uuid == assignment_uuid)
+    )).scalars().first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    course = (await db_session.execute(
+        select(Course).where(Course.id == assignment.course_id)
+    )).scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    await authorize_assignment_access(
+        request, db_session, current_user, course.course_uuid, AccessAction.UPDATE
+    )
+
+    if assignment.ungraded:
+        raise HTTPException(
+            status_code=400,
+            detail="Formative assignments are complete once handed in; no extra attempt is needed.",
+        )
+
+    submission = (await db_session.execute(
+        select(AssignmentUserSubmission)
+        .where(
+            AssignmentUserSubmission.user_id == user_id,
+            AssignmentUserSubmission.assignment_id == assignment.id,
+        )
+        .with_for_update()
+    )).scalars().first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Assignment User Submission not found")
+    if submission.submission_status != AssignmentUserSubmissionStatus.GRADED:
+        raise HTTPException(
+            status_code=400,
+            detail="Only a graded attempt can be followed by a granted one.",
+        )
+    if _is_assignment_past_due(assignment):
+        raise HTTPException(
+            status_code=400,
+            detail="The deadline has passed; extend the due date before granting an attempt.",
+        )
+
+    tasks = (await db_session.execute(
+        select(AssignmentTask).where(AssignmentTask.assignment_id == assignment.id)
+    )).scalars().all()
+    max_grade = sum(int(t.max_grade_value or 0) for t in tasks)
+    if compute_assignment_grade(
+        int(submission.grade or 0), max_grade, assignment.grading_type,
+        pass_threshold_percentage=assignment.pass_threshold_percentage,
+    )["passed"]:
+        raise HTTPException(status_code=400, detail="The student already passed this assignment.")
+
+    previous_attempt = int(submission.attempt_number or 1)
+    max_attempts = int(assignment.max_retries or 0)
+    if assignment.allow_retries and (not max_attempts or previous_attempt < max_attempts):
+        raise HTTPException(
+            status_code=400,
+            detail="The student still has retries left and can try again themselves.",
+        )
+
+    # Same reset as retry_assignment_submission (kept separate so that upstream
+    # function stays untouched). The answers being wiped were already
+    # snapshotted onto this attempt's ASSIGNMENT_SUBMITTED audit row.
+    task_ids = [t.id for t in tasks if t.id is not None]
+    if task_ids:
+        for ts in (await db_session.execute(
+            select(AssignmentTaskSubmission).where(
+                AssignmentTaskSubmission.user_id == user_id,
+                AssignmentTaskSubmission.assignment_task_id.in_(task_ids),  # type: ignore[attr-defined]
+            )
+        )).scalars().all():
+            await db_session.delete(ts)
+    trailstep = (await db_session.execute(
+        select(TrailStep).where(
+            TrailStep.activity_id == assignment.activity_id,
+            TrailStep.user_id == user_id,
+        )
+    )).scalars().first()
+    if trailstep:
+        trailstep.complete = False
+        trailstep.teacher_verified = False
+        trailstep.grade = ""
+        trailstep.update_date = str(datetime.now())
+        db_session.add(trailstep)
+    submission.submission_status = AssignmentUserSubmissionStatus.PENDING
+    submission.grade = 0
+    submission.overall_feedback = None
+    submission.attempt_number = previous_attempt + 1
+    submission.update_date = str(datetime.now())
+    db_session.add(submission)
+    await db_session.commit()
+    await db_session.refresh(submission)
+
+    if course.id:
+        await revoke_user_certificate(
+            user_id, course.id, db_session, reason="assignment_attempt_granted"
+        )
+        await sync_trailrun_status(user_id, course.id, db_session)
+
+    # Written to the student's audit log even though an instructor acted:
+    # the grant changes the student's attempt history, which is what the
+    # completion record has to explain.
+    await record_audit_event(
+        event_type=UserAuditEventType.ASSIGNMENT_ATTEMPT_GRANTED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=assignment.assignment_uuid,
+        metadata={
+            "course_uuid": course.course_uuid,
+            "course_name": course.name,
+            "previous_attempt_number": previous_attempt,
+            "attempt_number": submission.attempt_number,
+            "granted_by_user_id": int(current_user.id),
+            "granted_by_username": getattr(current_user, "username", None),
+        },
+    )
+
+    return {
+        "message": "Another attempt granted",
+        "attempt_number": submission.attempt_number,
+        "submission": AssignmentUserSubmissionRead.model_validate(submission).model_dump(),
+    }

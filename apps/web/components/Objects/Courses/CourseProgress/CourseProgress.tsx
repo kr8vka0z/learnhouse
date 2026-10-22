@@ -43,7 +43,9 @@ const CourseProgress: React.FC<CourseProgressProps> = ({ course, orgslug, isOpen
       }
     );
     if (run) {
-      return run.steps.find((step: any) => step.activity_id === activity.id)
+      // Rescue Ready fork: an incomplete step (assignment handed in, not
+      // passed) must not count as done.
+      return run.steps.find((step: any) => step.activity_id === activity.id && step.complete === true)
     }
     return false
   }

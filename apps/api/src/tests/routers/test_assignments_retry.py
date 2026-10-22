@@ -489,8 +489,10 @@ class TestCreateAssignmentSubmissionRetryPath:
         assert result.grade == 0
         assert result.attempt_number == 2
 
+        # Rescue Ready fork: "Submitting alone ... must NOT set
+        # TrailStep.complete"; this assignment is not auto-graded.
         await db.refresh(step)
-        assert step.complete is True
+        assert step.complete is False
 
         rows = (await db.execute(
             select(AssignmentUserSubmission).where(
@@ -585,8 +587,10 @@ class TestCreateAssignmentSubmissionRetryPath:
         assert result.grade == 0
         assert result.attempt_number == 1
 
+        # Rescue Ready fork: "Submitting alone ... must NOT set
+        # TrailStep.complete"; this assignment is not auto-graded.
         await db.refresh(step)
-        assert step.complete is True
+        assert step.complete is False
 
         rows = (await db.execute(
             select(AssignmentUserSubmission).where(
