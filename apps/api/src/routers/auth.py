@@ -1436,23 +1436,26 @@ async def api_verify_email(
         org_id=session_org_id,
         custom_domain=on_custom_domain,
     )
+
+    # Rescue Ready fork: the verification link signs the user in, so it is a
+    # sign-in for the student record too. Written at first-factor success,
+    # before the MFA branch, like password, Google and the magic links.
+    client_ip, user_agent = extract_request_context(request)
+    await record_audit_event(
+        event_type=UserAuditEventType.LOGIN,
+        user_id=user.id,
+        org_id=session_org_id,
+        ip=client_ip,
+        user_agent=user_agent,
+        metadata={"method": "email_verification"},
+    )
+
     if issue.mfa_required:  # pragma: no cover - same 2FA branch as /login, exercised there
         return {
             "message": message,
             "mfa_required": True,
             "mfa_token": issue.mfa_token,
         }
-
-    # Rescue Ready fork: the verification link signs the user in, so it is a
-    # sign-in for the student record too.
-    await record_audit_event(
-        event_type=UserAuditEventType.LOGIN,
-        user_id=user.id,
-        org_id=session_org_id,
-        ip=get_client_ip(request),
-        user_agent=request.headers.get("user-agent"),
-        metadata={"method": "email_verification"},
-    )
 
     set_auth_cookies(response, issue.access_token, issue.refresh_token, request)
 

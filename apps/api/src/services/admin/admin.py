@@ -401,6 +401,14 @@ async def issue_user_token(
         },
         expires_delta=timedelta(hours=1),
     )
+    # Rescue Ready fork: a minted session is a sign-in on the student's record.
+    # No IP/user agent: the caller is the integration's server, not the student.
+    await record_audit_event(
+        event_type=UserAuditEventType.LOGIN,
+        user_id=user.id,
+        org_id=token_user.org_id,
+        metadata={"method": "admin_token", "api_token_id": token_user.id},
+    )
     return {
         "access_token": access_token,
         "token_type": "bearer",
