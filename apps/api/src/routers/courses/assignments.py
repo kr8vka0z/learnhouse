@@ -29,6 +29,7 @@ from src.services.courses.activities.assignments import (
     get_assignments_from_course,
     get_grade_assignment_submission,
     grade_assignment_submission,
+    grant_assignment_attempt,  # Rescue Ready fork
     handle_assignment_task_submission,
     mark_activity_as_done_for_user,
     put_assignment_solution_file,
@@ -960,6 +961,36 @@ async def api_submission_mark_as_done(
 
     return await mark_activity_as_done_for_user(
         request, user_id, assignment_uuid, current_user, db_session
+    )
+
+
+# Rescue Ready fork: instructor grants one student one more attempt. Completion
+# now requires a pass, so a student out of retries would otherwise be stuck.
+@router.post(
+    "/{assignment_uuid}/submissions/{user_id}/grant-attempt",
+    summary="Grant a student another attempt",
+    description=(
+        "Reopen a student's graded, failed submission for one more attempt "
+        "after they have used every retry they are allowed. Requires the same "
+        "permission as grading. Recorded in the student's audit log."
+    ),
+    responses={
+        200: {"description": "Attempt granted; returns the new attempt number."},
+        400: {"description": "Not eligible (not graded, passed, retries left, or past due)"},
+        401: {"description": "Authentication required"},
+        403: {"description": "User lacks permission to grade this course"},
+        404: {"description": "Assignment or submission not found"},
+    },
+)
+async def api_grant_assignment_attempt(
+    request: Request,
+    assignment_uuid: str,
+    user_id: int,
+    current_user: PublicUser = Depends(get_current_user),
+    db_session=Depends(get_db_session),
+):
+    return await grant_assignment_attempt(
+        request, assignment_uuid, user_id, current_user, db_session
     )
 
 

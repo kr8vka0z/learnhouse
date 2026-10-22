@@ -1,8 +1,9 @@
 """Coverage for COURSE_COMPLETED firing on the assignment-submission path.
 
-When the final activity in a course is an assignment, create_assignment_submission
-must fire COURSE_COMPLETED (assignment activities don't go through the trail's
-mark-activity-done flow, which is what normally emits the event).
+When the final activity in a course is an assignment, COURSE_COMPLETED must fire
+from the assignment flow (assignment activities don't go through the trail's
+mark-activity-done flow, which is what normally emits the event). Rescue Ready
+fork: it fires when a pass completes the activity, not on submission.
 
 (The concurrent-submit IntegrityError-recovery branches are marked
 ``# pragma: no cover`` in the service: the unique constraints that back them are
@@ -59,12 +60,14 @@ async def _trail(db, course, user):
 
 class TestCourseCompletedFires:
     @pytest.mark.asyncio
-    async def test_course_completed_dispatched_when_assignment_finishes_course(
+    async def test_course_completed_not_fired_on_submission_awaiting_grade(
         self, mock_request, db, org, course, chapter, activity, regular_user
     ):
-        # The `activity` fixture is published and already linked to the course
-        # via a ChapterActivity, and it's the only activity, so submitting the
-        # assignment completes the course and COURSE_COMPLETED must fire.
+        # Rescue Ready fork: the `activity` fixture is the course's only
+        # activity, but this assignment is manually graded, so handing it in
+        # does NOT complete it ("Submitting alone ... must NOT set
+        # TrailStep.complete") and COURSE_COMPLETED must not fire yet. The pass
+        # path that does fire it is covered in test_rr_assignment_completion.py.
         assignment = await _assignment(db, org, course, chapter, activity)
         trail = await _trail(db, course, regular_user)
 
@@ -80,8 +83,8 @@ class TestCourseCompletedFires:
 
         dispatched = [c.kwargs.get("event_name") for c in mock_dispatch.await_args_list]
         tracked = [c.kwargs.get("event_name") for c in mock_track.await_args_list]
-        assert "course_completed" in dispatched
-        assert "course_completed" in tracked
+        assert "course_completed" not in dispatched
+        assert "course_completed" not in tracked
 
     @pytest.mark.asyncio
     async def test_course_not_completed_does_not_fire_when_other_activity_incomplete(

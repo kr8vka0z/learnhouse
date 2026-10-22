@@ -42,6 +42,10 @@ class UserAuditEventType:
     # student received on an earlier attempt survives only here.
     ASSIGNMENT_SUBMITTED = "assignment_submitted"
     ASSIGNMENT_GRADED = "assignment_graded"  # grade the student RECEIVED
+    # Rescue Ready fork: an instructor gave this student one more attempt past
+    # the retry cap. Recorded on the STUDENT's log (user_id = student) because
+    # it changes their attempt history; the granting instructor is in metadata.
+    ASSIGNMENT_ATTEMPT_GRANTED = "assignment_attempt_granted"
 
     # Achievements
     CERTIFICATE_CLAIMED = "certificate_claimed"
