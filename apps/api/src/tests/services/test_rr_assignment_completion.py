@@ -245,19 +245,21 @@ class TestRegradeAndOverride:
         )
         assert (await _step(db, activity, regular_user)).complete is False
 
-    async def test_instructor_mark_done_is_audited_as_override(
+    async def test_instructor_mark_done_is_refused(
         self, env, mock_request, db, org, course, chapter, activity,
         regular_user, admin_user,
     ):
+        # Owner decision: no mark-done override on assignments; a failed
+        # attempt stays incomplete until a passing grade.
         a = await _assignment(db, org, course, chapter, activity, auto_grading=False)
         await _attempt(mock_request, db, a, regular_user, "5")
-        await mark_activity_as_done_for_user(
-            mock_request, regular_user.id, a.assignment_uuid, admin_user, db
-        )
-        assert (await _step(db, activity, regular_user)).complete is True
-        completed = _audits(env, UserAuditEventType.ACTIVITY_COMPLETED)
-        assert len(completed) == 1
-        assert completed[0]["metadata"]["completed_by"] == "instructor"
+        with pytest.raises(HTTPException) as exc:
+            await mark_activity_as_done_for_user(
+                mock_request, regular_user.id, a.assignment_uuid, admin_user, db
+            )
+        assert exc.value.status_code == 400
+        assert (await _step(db, activity, regular_user)).complete is False
+        assert _audits(env, UserAuditEventType.ACTIVITY_COMPLETED) == []
 
 
 class TestFormative:

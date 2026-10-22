@@ -505,6 +505,14 @@ def rag_dispatch():
         yield dispatch
 
 
+@pytest.fixture(autouse=True)
+def no_audit_retry_delay():
+    """Rescue Ready fork: the audit writer pauses before its one retry. Tests
+    that reach it without a database would each pay that pause."""
+    with patch("src.services.audit.audit._RETRY_DELAY_SECONDS", 0):
+        yield
+
+
 @pytest.fixture
 def mock_request():
     """Minimal Starlette Request for passing to service functions."""

@@ -17,7 +17,7 @@ import TaskEssayObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskEss
 import { isEssayTask } from '@/lib/assignments/essay';
 import { useOrg } from '@components/Contexts/OrgContext';
 import { getTaskRefFileDir } from '@services/media/media';
-import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, markActivityAsDoneForUser, putFinalGrade } from '@services/courses/assignments';
+import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, putFinalGrade } from '@services/courses/assignments';
 import { useLHSession } from '@components/Contexts/LHSessionContext';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
@@ -193,20 +193,18 @@ function EvaluateAssignment({ user_id }: any) {
             queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
             return
         }
-        const doneRes = await markActivityAsDoneForUser(user_id, assignmentUuid, access_token)
-        if (doneRes.success) {
-            toast.success(t('dashboard.assignments.submissions.toasts.finalize_success'))
-            track(AnalyticsEvent.SubmissionFinalized, {
-                passed: gradeRes.data.passed,
-                display_grade: gradeRes.data.display_grade,
-            })
-            const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
-            queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
-            queryClient.invalidateQueries({ queryKey: queryKeys.assignments.analytics(rawUuid) })
-            queryClient.invalidateQueries({ queryKey: queryKeys.assignments.submission(rawUuid) })
-        } else {
-            toast.error(doneRes.data?.detail || t('common.something_went_wrong'))
-        }
+        // Rescue Ready fork: the passing grade has already completed the
+        // activity on the server; the separate "mark as done" override is now
+        // refused for assignments (owner decision), so it is no longer called.
+        toast.success(t('dashboard.assignments.submissions.toasts.finalize_success'))
+        track(AnalyticsEvent.SubmissionFinalized, {
+            passed: gradeRes.data.passed,
+            display_grade: gradeRes.data.display_grade,
+        })
+        const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.analytics(rawUuid) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.submission(rawUuid) })
     }
 
     async function rejectAssignment() {

@@ -12,7 +12,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Request, status
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
-from src.db.courses.activities import Activity
+from src.db.courses.activities import Activity, ActivityTypeEnum
 from src.db.courses.chapter_activities import ChapterActivity
 from src.db.courses.chapters import Chapter
 from src.db.courses.course_chapters import CourseChapter
@@ -53,6 +53,9 @@ from src.services.orgs.users import _rights_within
 from src.services.analytics.analytics import track
 from src.services.analytics import events as analytics_events
 from src.services.webhooks.dispatch import dispatch_webhooks
+# Rescue Ready fork: admin-API enrollment/completion writes the student record.
+from src.services.audit.audit import record_audit_event
+from src.db.user_audit_events import UserAuditEventType
 from src.security.auth import create_access_token
 from src.security.org_auth import org_owns_account
 from src.security.session_context import AUTH_METHOD_API_TOKEN, session_claims
@@ -398,6 +401,14 @@ async def issue_user_token(
         },
         expires_delta=timedelta(hours=1),
     )
+    # Rescue Ready fork: a minted session is a sign-in on the student's record.
+    # No IP/user agent: the caller is the integration's server, not the student.
+    await record_audit_event(
+        event_type=UserAuditEventType.LOGIN,
+        user_id=user.id,
+        org_id=token_user.org_id,
+        metadata={"method": "admin_token", "api_token_id": token_user.id},
+    )
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -447,6 +458,51 @@ async def check_course_access(
 
 
 # -- Enrollment endpoints -----------------------------------------------------
+
+
+async def _rr_record_enrolled(user_id: int, course: Course, enrolled_by: str) -> None:
+    """Rescue Ready fork: COURSE_ENROLLED audit row for an admin-API enrollment.
+
+    The student self-enroll path (``add_course_to_trail``) already writes it;
+    these routes created the TrailRun with analytics only, so a student enrolled
+    by the school had no enrollment in their record.
+    """
+    await record_audit_event(
+        event_type=UserAuditEventType.COURSE_ENROLLED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=course.course_uuid,
+        metadata={"course_name": course.name, "enrolled_by": enrolled_by},
+    )
+
+
+async def _rr_record_completed(
+    user_id: int, course: Course, activity_uuid: str, activity_type: str
+) -> None:
+    """Rescue Ready fork: ACTIVITY_COMPLETED audit row for an admin-API completion
+    (these routes used to call ``track`` only, leaving no record)."""
+    await record_audit_event(
+        event_type=UserAuditEventType.ACTIVITY_COMPLETED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=activity_uuid,
+        metadata={
+            "course_uuid": course.course_uuid,
+            "course_name": course.name,
+            "activity_type": activity_type or "",
+            "completed_by": "admin_api",
+        },
+    )
+
+
+async def _rr_record_course_completed(user_id: int, course: Course) -> None:
+    await record_audit_event(
+        event_type=UserAuditEventType.COURSE_COMPLETED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=course.course_uuid,
+        metadata={"course_name": course.name, "completed_by": "admin_api"},
+    )
 
 
 async def enroll_user(
@@ -515,6 +571,7 @@ async def enroll_user(
         user_id=user_id,
         properties={"course_uuid": course.course_uuid},
     )
+    await _rr_record_enrolled(user_id, course, "admin_api")  # Rescue Ready fork
 
     trail_runs_raw = list((await db_session.execute(
         select(TrailRun).where(TrailRun.trail_id == trail.id, TrailRun.user_id == user_id)
@@ -667,6 +724,14 @@ async def complete_activity(
     if not course or course.org_id != token_user.org_id:
         raise HTTPException(status_code=404, detail="Activity not found")
 
+    # Rescue Ready fork (owner decision): an assignment is complete only when
+    # passed, so the API token can't mark one done; it sets a grade instead.
+    if activity.activity_type == ActivityTypeEnum.TYPE_ASSIGNMENT:
+        raise HTTPException(
+            status_code=400,
+            detail="Assignments are completed by a passing grade, not marked done.",
+        )
+
     # Ensure trail exists
     trail = (await db_session.execute(
         select(Trail).where(Trail.org_id == token_user.org_id, Trail.user_id == user_id)
@@ -703,6 +768,7 @@ async def complete_activity(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        await _rr_record_enrolled(user_id, course, "admin_api_completion")  # Rescue Ready fork
 
     # Check for existing step
     existing_step = (await db_session.execute(
@@ -731,7 +797,16 @@ async def complete_activity(
         db_session.add(step)
         await db_session.commit()
         await db_session.refresh(step)
+    elif not existing_step.complete:
+        # Rescue Ready fork: an existing incomplete step used to be left
+        # incomplete while the response still said completed=True.
+        existing_step.complete = True
+        existing_step.update_date = str(datetime.now())
+        db_session.add(existing_step)
+        await db_session.commit()
+        is_new = True
 
+    if is_new:
         await track(
             event_name=analytics_events.ACTIVITY_COMPLETED,
             org_id=course.org_id,
@@ -742,6 +817,8 @@ async def complete_activity(
                 "activity_type": activity.activity_type if activity.activity_type else "",
             },
         )
+        # Rescue Ready fork: the completion belongs in the student record too.
+        await _rr_record_completed(user_id, course, activity_uuid, activity.activity_type)
 
     # Check course completion. The completion signal must come from actual
     # completion (is_course_fully_completed), NOT from the certificate helper's
@@ -766,6 +843,8 @@ async def complete_activity(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        if is_new:  # Rescue Ready fork: record only the transition, not repeats
+            await _rr_record_course_completed(user_id, course)
 
     return {
         "activity_uuid": activity_uuid,
@@ -877,6 +956,7 @@ async def complete_course(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        await _rr_record_enrolled(user_id, course, "admin_api_completion")  # Rescue Ready fork
 
     # Get all activities in the course
     chapter_activities = (await db_session.execute(
@@ -905,9 +985,45 @@ async def complete_course(
     )).scalars().all()
     already_completed = {s.activity_id for s in existing_steps}
 
+    # Rescue Ready fork (owner decision): assignments complete only when passed,
+    # so this bulk override leaves them to the grade. An existing incomplete
+    # step is flipped rather than duplicated, and every completion it sets is
+    # written to the student record.
+    activities_by_id = {
+        a.id: a for a in (await db_session.execute(
+            select(Activity).where(Activity.id.in_(activity_ids))  # type: ignore[union-attr]
+        )).scalars().all()
+    }
+    skipped_assignments = [
+        aid for aid in activity_ids
+        if aid not in already_completed and activities_by_id.get(aid) is not None
+        and activities_by_id[aid].activity_type == ActivityTypeEnum.TYPE_ASSIGNMENT
+    ]
+    incomplete_steps = {
+        s.activity_id: s for s in (await db_session.execute(
+            select(TrailStep).where(
+                TrailStep.user_id == user_id,
+                TrailStep.course_id == course.id,
+                TrailStep.complete == False,  # noqa: E712
+            )
+        )).scalars().all()
+    }
+    newly_completed: list[int] = []
+
     new_count = 0
     for activity_id in activity_ids:
+        if activity_id in skipped_assignments or activity_id in already_completed:
+            continue
+        if activity_id in incomplete_steps:
+            step = incomplete_steps[activity_id]
+            step.complete = True
+            step.update_date = str(datetime.now())
+            db_session.add(step)
+            new_count += 1
+            newly_completed.append(activity_id)
+            continue
         if activity_id not in already_completed:
+            newly_completed.append(activity_id)
             step = TrailStep(
                 trailrun_id=trailrun.id if trailrun.id is not None else 0,
                 activity_id=activity_id,
@@ -925,6 +1041,11 @@ async def complete_course(
             new_count += 1
 
     await db_session.commit()
+
+    for activity_id in newly_completed:  # Rescue Ready fork
+        act = activities_by_id.get(activity_id)
+        if act is not None:
+            await _rr_record_completed(user_id, course, act.activity_uuid, act.activity_type)
 
     # Create the certificate if eligible. Its return value means "a NEW
     # certificate row was created", so it maps to certificate_awarded, NOT to
@@ -945,6 +1066,8 @@ async def complete_course(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        if newly_completed:  # Rescue Ready fork: record only the transition
+            await _rr_record_course_completed(user_id, course)
 
     return {
         "course_uuid": course_uuid,
@@ -952,6 +1075,7 @@ async def complete_course(
         "completed_count": new_count,
         "already_completed_count": len(already_completed),
         "total_activities": len(activity_ids),
+        "skipped_assignments": len(skipped_assignments),  # Rescue Ready fork
         "course_completed": course_completed,
         "certificate_awarded": certificate_awarded,
     }
@@ -1867,6 +1991,7 @@ async def bulk_enroll_users(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        await _rr_record_enrolled(user_id, course, "admin_api_bulk")  # Rescue Ready fork
 
     return {
         "enrolled": enrolled,

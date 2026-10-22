@@ -51,13 +51,20 @@ async function buildPdf(dossiers: any[]) {
   const line = (text: string, size = 10, bold = false, indent = 0) => {
     pdf.setFontSize(size)
     pdf.setFont('helvetica', bold ? 'bold' : 'normal')
-    const wrapped = pdf.splitTextToSize(text || '', pageWidth - margin * 2 - indent)
-    // Measure before deciding on the page break: checking only the current y let a
-    // wrapped paragraph start near the bottom and run off the page.
-    const height = wrapped.length * (size * 0.45) + 1.5
-    breakIfNeeded(height)
-    pdf.text(wrapped, margin + indent, y)
-    y += height
+    const wrapped: string[] = pdf.splitTextToSize(text || '', pageWidth - margin * 2 - indent)
+    // Rescue Ready fork: print in chunks of at most a page. A paragraph taller
+    // than one page (a long essay answer) used to run off the bottom and be lost.
+    const lineHeight = size * 0.45
+    const perPage = Math.max(1, Math.floor((pageHeight - margin * 2) / lineHeight) - 1)
+    for (let i = 0; i < wrapped.length || i === 0; i += perPage) {
+      const chunk = wrapped.slice(i, i + perPage)
+      // Measure before deciding on the page break: checking only the current y let a
+      // wrapped paragraph start near the bottom and run off the page.
+      const height = chunk.length * lineHeight + 1.5
+      breakIfNeeded(height)
+      pdf.text(chunk, margin + indent, y)
+      y += height
+    }
   }
   const gap = (h = 3) => { y += h }
   const heading = (text: string) => {

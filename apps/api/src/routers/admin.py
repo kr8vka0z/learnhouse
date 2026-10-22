@@ -122,6 +122,10 @@ class CourseCompletionResponse(BaseModel):
     completed_count: int = Field(description="Number of newly completed activities")
     already_completed_count: int = Field(description="Number of activities that were already completed")
     total_activities: int
+    # Rescue Ready fork: assignments complete only on a passing grade.
+    skipped_assignments: int = Field(
+        default=0, description="Unfinished assignments left alone (they complete on a passing grade)"
+    )
     course_completed: bool
     certificate_awarded: bool = Field(description="True if a certificate was awarded as a result")
 
@@ -589,6 +593,8 @@ async def api_admin_get_user_progress(
     ),
     responses={
         200: {"description": "Activity marked complete; includes whether this completed the course.", "model": ActivityCompletionResponse},
+        # Rescue Ready fork: assignments complete only on a passing grade.
+        400: {"description": "The activity is an assignment; it completes on a passing grade"},
         404: {"description": "Activity not found"},
     },
 )

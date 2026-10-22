@@ -1,0 +1,489 @@
+"""Rescue Ready fork: the student record (audit log + completion data) is complete
+and survives. Covers the audit writer's retry, LOGIN on every sign-in path,
+COURSE_ENROLLED on admin enrollment, the user-delete guard, one completion per
+pass under concurrent grading, regrade provenance, and the mark-done rules.
+"""
+
+import pytest
+from sqlmodel import select
+
+from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
+from src.services.audit.audit import record_audit_event
+from src.tests.services.test_rr_assignment_completion import (  # noqa: F401 (env is a fixture)
+    _assignment,
+    _attempt,
+    _audits,
+    _step,
+    env,
+)
+
+
+class _CM:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class TestAuditWriter:
+    async def test_transient_failure_is_retried_once(self, db, regular_user, org, monkeypatch):
+        calls = {"n": 0}
+
+        def factory():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ConnectionError("db blip")
+            return _CM(db)
+
+        monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
+        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
+        await record_audit_event(
+            event_type=UserAuditEventType.LOGIN, user_id=regular_user.id, org_id=org.id,
+            metadata={"method": "password"},
+        )
+        rows = (await db.execute(select(UserAuditEvent))).scalars().all()
+        assert len(rows) == 1 and rows[0].event_type == UserAuditEventType.LOGIN
+
+    async def test_permanent_failure_logs_ids_but_no_student_content(
+        self, regular_user, monkeypatch, caplog
+    ):
+        def factory():
+            raise ConnectionError("db down")
+
+        monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
+        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
+        essay = "my private essay " * 10_000
+        await record_audit_event(  # never raises
+            event_type=UserAuditEventType.ASSIGNMENT_SUBMITTED, user_id=regular_user.id,
+            ip="203.0.113.7", user_agent="secret-agent/1.0", target_uuid="assignment_x",
+            metadata={"attempt_number": 2, "answers": [{"answer": {"answer": essay}}]},
+        )
+        lost = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert len(lost) == 1
+        line = lost[0]
+        assert "assignment_x" in line and '"attempt_number": 2' in line and "answers" in line
+        assert "private essay" not in line
+        assert "203.0.113.7" not in line and "secret-agent" not in line
+        assert len(line.encode()) < 48 * 1024
+
+
+class TestRecordShowsWholeAnswer:
+    def test_long_custom_answer_is_not_cut_in_the_dossier(self):
+        # An essay is a CUSTOM task; the dossier is the official record.
+        from src.services.audit.answers import humanize_task_answer
+
+        essay = ("word " * 20_000).strip()  # ~100k characters
+        out = humanize_task_answer("CUSTOM", {"kind": "essay"}, {"answer": essay})
+        assert [i["answer_text"] for i in out["items"]] == [essay]
+
+
+# ---------------------------------------------------------------------------
+# Every sign-in path writes LOGIN
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def audit_to_test_db(db, monkeypatch):
+    """Route the audit writer's own session to the test database, so tests read
+    the real rows it writes."""
+    monkeypatch.setattr("src.core.events.database._async_session_factory", lambda: _CM(db))
+
+
+async def _audit_rows(db, user_id, event_type):
+    return (await db.execute(select(UserAuditEvent).where(
+        UserAuditEvent.user_id == user_id, UserAuditEvent.event_type == event_type,
+    ))).scalars().all()
+
+
+@pytest.fixture
+def auth_client(db):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from src.core.events.database import get_db_session
+    from src.db.users import AnonymousUser
+    from src.routers.auth import router as auth_router
+    from src.security.auth import get_current_user
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1/auth")
+    app.dependency_overrides[get_db_session] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: AnonymousUser()
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+class TestLoginAudit:
+    async def test_self_serve_magic_link_writes_login(
+        self, auth_client, audit_to_test_db, db, regular_user
+    ):
+        from src.services.auth.magic_login import issue_magic_login_token
+
+        user_id = regular_user.id
+        token = issue_magic_login_token(regular_user.email, None)
+        async with auth_client as c:
+            r = await c.post("/api/v1/auth/magic-link/verify", json={"token": token},
+                             headers={"user-agent": "ua-test"})
+        assert r.status_code == 200
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert len(rows) == 1
+        assert rows[0].audit_metadata == {"method": "magic_link"}
+        assert rows[0].user_agent == "ua-test" and rows[0].ip
+
+    async def test_admin_issued_magic_link_writes_login(
+        self, auth_client, audit_to_test_db, db, org, regular_user
+    ):
+        from datetime import timedelta
+
+        from src.security.auth import create_access_token
+
+        user_id, org_id = regular_user.id, org.id
+        token = create_access_token(
+            data={"sub": regular_user.email, "purpose": "magic_link", "org_id": org_id,
+                  "redirect_to": "", "jti": "rr-admin-link"},
+            expires_delta=timedelta(minutes=5),
+        )
+        async with auth_client as c:
+            r = await c.post("/api/v1/auth/magic-link/verify", json={"token": token})
+        assert r.status_code == 200
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert len(rows) == 1
+        assert rows[0].audit_metadata == {"method": "admin_magic_link"}
+        assert rows[0].org_id == org_id
+
+    async def test_login_row_survives_last_login_failure(
+        self, auth_client, audit_to_test_db, db, regular_user
+    ):
+        from unittest.mock import patch
+
+        from src.services.auth.magic_login import issue_magic_login_token
+
+        user_id = regular_user.id
+        token = issue_magic_login_token(regular_user.email, None)
+        with patch("src.routers.auth.update_login_info", side_effect=RuntimeError("blip")):
+            async with auth_client as c:
+                r = await c.post("/api/v1/auth/magic-link/verify", json={"token": token})
+        assert r.status_code == 200
+        assert len(await _audit_rows(db, user_id, UserAuditEventType.LOGIN)) == 1
+
+    async def test_email_verification_sign_in_writes_login(
+        self, auth_client, audit_to_test_db, db, org, regular_user
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from src.db.users import User
+
+        user_id = regular_user.id
+        user = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+        with patch("src.routers.auth.check_email_verification_rate_limit", return_value=(True, None)), \
+             patch("src.routers.auth.verify_email_token", new_callable=AsyncMock,
+                   return_value=(user, "Email verified")):
+            async with auth_client as c:
+                r = await c.post("/api/v1/auth/verify-email", json={
+                    "token": "t", "user_uuid": regular_user.user_uuid, "org_uuid": org.org_uuid,
+                })
+        assert r.status_code == 200 and r.json().get("tokens")
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert [row.audit_metadata["method"] for row in rows] == ["email_verification"]
+
+    async def test_email_verification_with_mfa_still_writes_login(
+        self, auth_client, audit_to_test_db, db, org, regular_user
+    ):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from src.db.user_mfa import UserMFA
+        from src.db.users import User
+
+        user_id, now = regular_user.id, str(datetime.now())
+        db.add(UserMFA(user_id=user_id, secret_encrypted="x", confirmed_at=now,
+                       creation_date=now, update_date=now))
+        await db.commit()
+        user = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+        with patch("src.routers.auth.check_email_verification_rate_limit", return_value=(True, None)), \
+             patch("src.routers.auth.verify_email_token", new_callable=AsyncMock,
+                   return_value=(user, "Email verified")):
+            async with auth_client as c:
+                r = await c.post("/api/v1/auth/verify-email", json={
+                    "token": "t", "user_uuid": regular_user.user_uuid, "org_uuid": org.org_uuid,
+                })
+        assert r.status_code == 200 and r.json().get("mfa_required") is True
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert [row.audit_metadata["method"] for row in rows] == ["email_verification"]
+
+    async def test_admin_api_session_token_writes_login(
+        self, audit_to_test_db, db, org, regular_user, token_user
+    ):
+        from src.services.admin.admin import issue_user_token
+
+        user_id, org_id = regular_user.id, org.id
+        await issue_user_token(token_user, user_id, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert [(r.audit_metadata["method"], r.org_id) for r in rows] == [("admin_token", org_id)]
+
+
+# ---------------------------------------------------------------------------
+# Admin-API enrollment writes COURSE_ENROLLED
+# ---------------------------------------------------------------------------
+
+_ADMIN = "src.services.admin.admin."
+
+
+@pytest.fixture
+def token_user(org, admin_user):
+    from src.db.users import APITokenUser
+
+    rights = {
+        b: {"action_create": True, "action_read": True, "action_update": True, "action_delete": True}
+        for b in ("users", "roles", "courses", "certifications", "usergroups")
+    }
+    return APITokenUser(
+        id=1, user_uuid="apitoken_rr", username="api_token", org_id=org.id, rights=rights,
+        token_name="t", created_by_user_id=admin_user.id,
+    )
+
+
+@pytest.fixture
+def quiet_admin():
+    from unittest.mock import AsyncMock, patch
+
+    with patch(_ADMIN + "track", new_callable=AsyncMock), \
+         patch(_ADMIN + "dispatch_webhooks", new_callable=AsyncMock), \
+         patch(_ADMIN + "check_course_completion_and_create_certificate", new_callable=AsyncMock,
+               return_value=False):
+        yield
+
+
+class TestAdminEnrollmentAudit:
+    async def test_enroll_user_writes_course_enrolled(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, regular_user, course
+    ):
+        from src.services.admin.admin import enroll_user
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        await enroll_user(mock_request, token_user, user_id, course_uuid, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_ENROLLED)
+        assert [r.target_uuid for r in rows] == [course_uuid]
+
+    async def test_bulk_enroll_writes_one_row_per_new_enrollment(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, regular_user, course
+    ):
+        from src.services.admin.admin import bulk_enroll_users
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        await bulk_enroll_users(token_user, course_uuid, [user_id], mock_request, db)
+        # Already enrolled the second time: no second row.
+        await bulk_enroll_users(token_user, course_uuid, [user_id], mock_request, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_ENROLLED)
+        assert [r.target_uuid for r in rows] == [course_uuid]
+
+
+# ---------------------------------------------------------------------------
+# Deleting an account must not erase the record
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def delete_rbac():
+    from unittest.mock import AsyncMock, patch
+
+    with patch("src.services.users.users.authorization_verify_if_user_is_anon", new_callable=AsyncMock), \
+         patch("src.services.users.users.authorization_verify_based_on_roles_and_authorship",
+               new_callable=AsyncMock), \
+         patch("src.services.trail.trail.track", new_callable=AsyncMock), \
+         patch("src.services.trail.trail.dispatch_webhooks", new_callable=AsyncMock):
+        yield
+
+
+@pytest.fixture
+def act_as_superadmin():
+    from unittest.mock import AsyncMock, patch
+
+    with patch("src.services.users.users.is_user_superadmin", new_callable=AsyncMock, return_value=True):
+        yield
+
+
+class TestUserDeleteKeepsRecords:
+    async def test_student_with_completion_cannot_be_hard_deleted(
+        self, delete_rbac, audit_to_test_db, act_as_superadmin, db, mock_request,
+        admin_user, regular_user, activity,
+    ):
+        from fastapi import HTTPException
+
+        from src.db.users import User
+        from src.services.trail.trail import add_activity_to_trail
+        from src.services.users.users import delete_user_by_id
+
+        user_id = regular_user.id
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_user_by_id(mock_request, db, admin_user, user_id)
+        assert exc.value.status_code == 409
+        assert (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+        assert await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+
+    async def test_sole_admin_cannot_delete_account_that_drops_org_records(
+        self, delete_rbac, audit_to_test_db, db, mock_request, admin_user, regular_user, activity,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.trail.trail import add_activity_to_trail
+        from src.services.users.users import delete_user_by_id
+
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+        # The admin has no records of their own, but is the org's only admin, so
+        # deleting the account would cascade the org and the student's record.
+        with pytest.raises(HTTPException) as exc:
+            await delete_user_by_id(mock_request, db, admin_user, admin_user.id)
+        assert exc.value.status_code == 409
+
+    async def test_sign_in_history_alone_does_not_block_deletion(
+        self, delete_rbac, audit_to_test_db, act_as_superadmin, auth_client, db, mock_request,
+        org, admin_user, regular_user,
+    ):
+        # Owner decision: only learning records are kept; an account that only
+        # ever signed in can still be deleted, as can a sole admin whose org
+        # holds nothing but sign-ins.
+        from src.db.users import User
+        from src.services.auth.magic_login import issue_magic_login_token
+        from src.services.users.users import delete_user_by_id
+
+        org_id, admin_id, student_id = org.id, admin_user.id, regular_user.id
+        async with auth_client as c:
+            for email in (regular_user.email, admin_user.email):
+                token = issue_magic_login_token(email, org_id)
+                assert (await c.post("/api/v1/auth/magic-link/verify", json={"token": token})).status_code == 200
+        # Org-scoped sign-ins, so the sole-admin org check sees them too.
+        for uid in (student_id, admin_id):
+            assert [r.org_id for r in await _audit_rows(db, uid, UserAuditEventType.LOGIN)] == [org_id]
+
+        await delete_user_by_id(mock_request, db, admin_user, student_id)
+        await delete_user_by_id(mock_request, db, admin_user, admin_id)
+        remaining = (await db.execute(select(User.id).where(User.id.in_([student_id, admin_id])))).all()
+        assert remaining == []
+
+
+# ---------------------------------------------------------------------------
+# Regrades are recorded as regrades
+# ---------------------------------------------------------------------------
+
+
+class TestRegradeProvenance:
+    async def test_answer_key_change_is_recorded_as_regrade(
+        self, env, mock_request, db, org, course, chapter, activity, regular_user, admin_user,
+    ):
+        from src.db.courses.assignments import AssignmentTaskUpdate
+        from src.services.courses.activities.assignments import update_assignment_task
+
+        a = await _assignment(db, org, course, chapter, activity)
+        await _attempt(mock_request, db, a, regular_user, "5")  # auto-graded: fails
+
+        # The instructor fixes the answer key; the stored answer now passes.
+        await update_assignment_task(
+            mock_request, "assignmenttask_rr_completion",
+            AssignmentTaskUpdate(contents={"correct_answers": ["5"], "match_mode": "exact"}),
+            admin_user, db,
+        )
+        graded = _audits(env, UserAuditEventType.ASSIGNMENT_GRADED)
+        assert [g["metadata"]["grade_source"] for g in graded] == ["auto_grade", "regrade"]
+        assert graded[-1]["metadata"]["auto_graded"] is False
+        completed = _audits(env, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [c["metadata"]["completed_by"] for c in completed] == ["regrade"]
+
+
+# ---------------------------------------------------------------------------
+# Mark-done: refused on assignments, allowed (and recorded) on other activities
+# ---------------------------------------------------------------------------
+
+
+async def _add_activity(db, org, course, chapter, activity_id, *, assignment):
+    from datetime import datetime
+
+    from src.db.courses.activities import Activity, ActivitySubTypeEnum, ActivityTypeEnum
+    from src.db.courses.chapter_activities import ChapterActivity
+
+    now = str(datetime.now())
+    a = Activity(
+        id=activity_id, name=f"A{activity_id}",
+        activity_type=ActivityTypeEnum.TYPE_ASSIGNMENT if assignment else ActivityTypeEnum.TYPE_DOCUMENT,
+        activity_sub_type=(ActivitySubTypeEnum.SUBTYPE_ASSIGNMENT_ANY if assignment
+                           else ActivitySubTypeEnum.SUBTYPE_DOCUMENT_PDF),
+        content={}, published=True, org_id=org.id, course_id=course.id,
+        activity_uuid=f"activity_rr_{activity_id}", creation_date=now, update_date=now,
+    )
+    db.add(a)
+    db.add(ChapterActivity(order=activity_id, chapter_id=chapter.id, activity_id=activity_id,
+                           course_id=course.id, org_id=org.id, creation_date=now, update_date=now))
+    await db.commit()
+    return a
+
+
+async def _complete_steps(db, user_id):
+    from src.db.trail_steps import TrailStep
+
+    return {s.activity_id for s in (await db.execute(select(TrailStep).where(
+        TrailStep.user_id == user_id, TrailStep.complete == True,  # noqa: E712
+    ))).scalars().all()}
+
+
+class TestAdminMarkDone:
+    async def test_complete_activity_refuses_assignment_allows_document(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, org, course, chapter,
+        regular_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.admin.admin import complete_activity
+
+        user_id = regular_user.id
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        quiz = await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid, quiz_uuid = doc.activity_uuid, quiz.activity_uuid
+
+        with pytest.raises(HTTPException) as exc:
+            await complete_activity(mock_request, token_user, user_id, quiz_uuid, db)
+        assert exc.value.status_code == 400
+
+        await complete_activity(mock_request, token_user, user_id, doc_uuid, db)
+        assert await _complete_steps(db, user_id) == {50}
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [(r.target_uuid, r.audit_metadata["completed_by"]) for r in rows] == [
+            (doc_uuid, "admin_api")
+        ]
+
+    async def test_complete_course_leaves_unpassed_assignment_incomplete(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, org, course, chapter,
+        regular_user,
+    ):
+        from src.services.admin.admin import complete_course
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid = doc.activity_uuid
+
+        result = await complete_course(mock_request, token_user, user_id, course_uuid, db)
+        assert result["skipped_assignments"] == 1 and result["course_completed"] is False
+        assert await _complete_steps(db, user_id) == {50}
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [r.target_uuid for r in rows] == [doc_uuid]
+
+    async def test_student_cannot_self_complete_assignment_but_can_a_document(
+        self, delete_rbac, db, mock_request, org, course, chapter, regular_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.trail.trail import add_activity_to_trail
+
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        quiz = await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid, quiz_uuid, user_id = doc.activity_uuid, quiz.activity_uuid, regular_user.id
+        with pytest.raises(HTTPException) as exc:
+            await add_activity_to_trail(mock_request, regular_user, quiz_uuid, db)
+        assert exc.value.status_code == 400
+        await add_activity_to_trail(mock_request, regular_user, doc_uuid, db)
+        assert await _complete_steps(db, user_id) == {50}

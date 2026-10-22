@@ -18,6 +18,28 @@ import { P } from './primitives'
  * skips the question, and must render as *no verdict* rather than as a failure.
  */
 
+// Rescue Ready fork: custom-task values arrive uncut (an essay can be ~100k
+// characters; the record must not lose any of it). Long ones start collapsed.
+const LONG_ANSWER_CHARS = 600
+
+function LongText({ text }: { text: string }) {
+  const { t } = useTranslation()
+  if (!text || text.length <= LONG_ANSWER_CHARS) {
+    return <span className="whitespace-pre-wrap">{text}</span>
+  }
+  return (
+    <details>
+      <summary className="cursor-pointer whitespace-pre-wrap">
+        {text.slice(0, LONG_ANSWER_CHARS)}…{' '}
+        <span className="font-semibold text-gray-500">
+          {t(`${P}.answer.show_all`, { defaultValue: 'Show all ({{count}} characters)', count: text.length })}
+        </span>
+      </summary>
+      <div className="whitespace-pre-wrap mt-1">{text}</div>
+    </details>
+  )
+}
+
 function Verdict({ correct }: { correct: boolean | null }) {
   const { t } = useTranslation()
   if (correct === null || correct === undefined) return null
@@ -222,7 +244,7 @@ export default function TaskAnswer({ answer }: { answer: any }) {
             {items.map((item: any, i: number) => (
               <div key={i} className="flex gap-2">
                 <dt className="font-semibold text-gray-500 flex-none">{item.prompt}</dt>
-                <dd className="text-gray-700 break-words">{item.answer_text}</dd>
+                <dd className="text-gray-700 break-words min-w-0"><LongText text={item.answer_text} /></dd>
               </div>
             ))}
           </dl>
