@@ -16,13 +16,27 @@ from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
 from src.db.trail_runs import TrailRun, StatusEnum
 from src.db.courses.certifications import Certifications, CertificateUser
 from src.routers.audit import router as audit_router
+from src.db.organization_config import OrganizationConfig  # Rescue Ready fork
 
 
 # ---------------------------------------------------------------------------
 # App / client fixtures (real in-memory db)
 # ---------------------------------------------------------------------------
 @pytest.fixture
-def app(db, admin_user):
+async def org_config(db, org):
+    # Rescue Ready fork: _enforce_plan now always reads the org's plan (the
+    # OSS-mode bypass that 403'd is gone, so _bypass_plan() below no longer
+    # matters), and every request needs the OrganizationConfig row that real
+    # org creation writes (v2, plan "free").
+    db.add(OrganizationConfig(
+        org_id=org.id, config={"config_version": "2.0", "plan": "free"},
+        creation_date=str(datetime.now()), update_date=str(datetime.now()),
+    ))
+    await db.commit()
+
+
+@pytest.fixture
+def app(db, admin_user, org_config):  # Rescue Ready fork: + org_config
     app = FastAPI()
     app.include_router(audit_router, prefix="/api/v1/audit")
     app.dependency_overrides[get_db_session] = lambda: db
@@ -936,3 +950,35 @@ class TestExtractContextFallbacks:
 
         ip, ua = extract_request_context(_Req())
         assert ua is None
+
+
+class TestOssModeUnlock:
+    """Rescue Ready fork: in OSS mode the student-records audit endpoints work
+    for org admins on the default "free" plan, with no mode bypass patched in."""
+
+    @pytest.fixture(autouse=True)
+    def oss_mode(self):
+        with patch("src.core.deployment_mode.get_deployment_mode", return_value="oss"):
+            yield
+
+    async def test_admin_reaches_summary(self, client, regular_user, seed_activity):
+        resp = await client.get(
+            f"/api/v1/audit/users/summary?org_id=1&user_ids={regular_user.id}"
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"][0]["courses_enrolled"] == 1
+
+    async def test_non_admin_still_forbidden(self, app, client, regular_user):
+        app.dependency_overrides[get_current_user] = lambda: regular_user
+        resp = await client.get(
+            f"/api/v1/audit/users/summary?org_id=1&user_ids={regular_user.id}"
+        )
+        assert resp.status_code == 403
+
+    async def test_saas_free_plan_still_blocked(self, client, regular_user):
+        """The unlock rides on OSS mode only; SaaS keeps its Pro gate."""
+        with patch("src.core.deployment_mode.get_deployment_mode", return_value="saas"):
+            resp = await client.get(
+                f"/api/v1/audit/users/summary?org_id=1&user_ids={regular_user.id}"
+            )
+        assert resp.status_code == 403
