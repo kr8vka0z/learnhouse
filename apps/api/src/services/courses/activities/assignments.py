@@ -4494,11 +4494,21 @@ async def _rr_sync_assignment_completion(
     if activity is None or course.id is None:
         return False
 
+    # Row lock held until the commit below: two overlapping grade passes (a
+    # double-click, a regrade racing a manual grade) used to both see the step
+    # incomplete and each write activity_completed + COURSE_COMPLETED + webhook.
+    # The second now waits, then reads the committed complete=True and stops.
+    # populate_existing: the session (expire_on_commit=False) may already hold
+    # this step from earlier in the request, and the stale copy would hide the
+    # other pass's commit. SQLite ignores FOR UPDATE; Postgres honours it.
     trailstep = (await db_session.execute(
         select(TrailStep).where(
             TrailStep.activity_id == activity.id,
             TrailStep.user_id == user_id,
         )
+        .order_by(TrailStep.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )).scalars().first()
 
     if not passed:
@@ -4510,7 +4520,18 @@ async def _rr_sync_assignment_completion(
             await sync_trailrun_status(user_id, course.id, db_session)
         return False
 
-    if trailstep is not None and trailstep.complete:
+    if trailstep is None:
+        # Submitting always creates the step, so a missing one means an admin
+        # removed the student's progress (unenroll, reset, uncomplete) while the
+        # graded submission survived. Recreating it here would silently
+        # re-enroll someone the school took out, from a bulk regrade no less.
+        logger.warning(
+            "Assignment %s passed for user %s but they have no trail step "
+            "(progress removed?); completion not recorded.",
+            assignment.assignment_uuid, user_id,
+        )
+        return False
+    if trailstep.complete:
         return False
 
     user = (await db_session.execute(
@@ -4519,38 +4540,8 @@ async def _rr_sync_assignment_completion(
     if user is None:
         return False
 
-    if trailstep is None:
-        # Normally the submission created the step; this covers rows that
-        # predate that (or were created by another path).
-        trail = await check_trail_presence(
-            org_id=course.org_id, user_id=user_id, request=request,  # type: ignore[arg-type]
-            user=user, db_session=db_session,  # type: ignore[arg-type]
-        )
-        trailrun = (await db_session.execute(
-            select(TrailRun).where(
-                TrailRun.trail_id == trail.id,
-                TrailRun.course_id == course.id,
-                TrailRun.user_id == user_id,
-            )
-        )).scalars().first()
-        if trailrun is None:
-            trailrun = TrailRun(
-                trail_id=trail.id or 0, course_id=course.id, org_id=course.org_id,
-                user_id=user_id, creation_date=str(datetime.now()),
-                update_date=str(datetime.now()),
-            )
-            db_session.add(trailrun)
-            await db_session.commit()
-            await db_session.refresh(trailrun)
-        trailstep = TrailStep(
-            trailrun_id=trailrun.id or 0, activity_id=activity.id or 0,
-            course_id=course.id, trail_id=trail.id or 0, org_id=course.org_id,
-            complete=True, teacher_verified=False, grade="", user_id=user_id,
-            creation_date=str(datetime.now()), update_date=str(datetime.now()),
-        )
-    else:
-        trailstep.complete = True
-        trailstep.update_date = str(datetime.now())
+    trailstep.complete = True
+    trailstep.update_date = str(datetime.now())
     db_session.add(trailstep)
     await db_session.commit()
 
