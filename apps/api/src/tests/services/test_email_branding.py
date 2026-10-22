@@ -93,15 +93,21 @@ class TestResolveOrgPoweredBy:
             with patch("src.core.deployment_mode.get_deployment_mode", return_value="saas"):
                 assert resolve_org_powered_by(cfg) is True
 
-    def test_open_source_edition_always_shows_it(self):
-        # Attribution is part of the OSS deal: no stored flag or plan turns it off.
+    # Rescue Ready fork: the fork's school runs white-label, so on the
+    # open-source edition the org's watermark toggle (the same one that hides
+    # the site badge) also drops the email line. Upstream forced it on here.
+    def test_open_source_edition_honours_the_watermark_toggle(self):
         for cfg in (
-            _config({"plan": "pro", "customization": {"general": {"watermark": False}}}),
-            _config({"cloud": {"plan": "enterprise"}, "general": {"watermark": False}}),
+            _config({"plan": "free", "customization": {"general": {"watermark": False}}}),
+            _config({"cloud": {"plan": "free"}, "general": {"watermark": False}}),
             _config({"customization": {"general": {"watermark": False}}}),
         ):
             with patch("src.core.deployment_mode.get_deployment_mode", return_value="oss"):
-                assert resolve_org_powered_by(cfg) is True
+                assert resolve_org_powered_by(cfg) is False
+        with patch("src.core.deployment_mode.get_deployment_mode", return_value="oss"):
+            assert resolve_org_powered_by(
+                _config({"customization": {"general": {"watermark": True}}})
+            ) is True
 
     def test_enterprise_licence_can_turn_it_off(self):
         cfg = _config({"plan": "free", "customization": {"general": {"watermark": False}}})
