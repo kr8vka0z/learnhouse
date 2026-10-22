@@ -12,7 +12,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Request, status
 from sqlmodel import select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
-from src.db.courses.activities import Activity
+from src.db.courses.activities import Activity, ActivityTypeEnum
 from src.db.courses.chapter_activities import ChapterActivity
 from src.db.courses.chapters import Chapter
 from src.db.courses.course_chapters import CourseChapter
@@ -716,6 +716,14 @@ async def complete_activity(
     if not course or course.org_id != token_user.org_id:
         raise HTTPException(status_code=404, detail="Activity not found")
 
+    # Rescue Ready fork (owner decision): an assignment is complete only when
+    # passed, so the API token can't mark one done; it sets a grade instead.
+    if activity.activity_type == ActivityTypeEnum.TYPE_ASSIGNMENT:
+        raise HTTPException(
+            status_code=400,
+            detail="Assignments are completed by a passing grade, not marked done.",
+        )
+
     # Ensure trail exists
     trail = (await db_session.execute(
         select(Trail).where(Trail.org_id == token_user.org_id, Trail.user_id == user_id)
@@ -781,7 +789,16 @@ async def complete_activity(
         db_session.add(step)
         await db_session.commit()
         await db_session.refresh(step)
+    elif not existing_step.complete:
+        # Rescue Ready fork: an existing incomplete step used to be left
+        # incomplete while the response still said completed=True.
+        existing_step.complete = True
+        existing_step.update_date = str(datetime.now())
+        db_session.add(existing_step)
+        await db_session.commit()
+        is_new = True
 
+    if is_new:
         await track(
             event_name=analytics_events.ACTIVITY_COMPLETED,
             org_id=course.org_id,
@@ -792,6 +809,8 @@ async def complete_activity(
                 "activity_type": activity.activity_type if activity.activity_type else "",
             },
         )
+        # Rescue Ready fork: the completion belongs in the student record too.
+        await _rr_record_completed(user_id, course, activity_uuid, activity.activity_type)
 
     # Check course completion. The completion signal must come from actual
     # completion (is_course_fully_completed), NOT from the certificate helper's
@@ -816,6 +835,8 @@ async def complete_activity(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        if is_new:  # Rescue Ready fork: record only the transition, not repeats
+            await _rr_record_course_completed(user_id, course)
 
     return {
         "activity_uuid": activity_uuid,
@@ -956,9 +977,45 @@ async def complete_course(
     )).scalars().all()
     already_completed = {s.activity_id for s in existing_steps}
 
+    # Rescue Ready fork (owner decision): assignments complete only when passed,
+    # so this bulk override leaves them to the grade. An existing incomplete
+    # step is flipped rather than duplicated, and every completion it sets is
+    # written to the student record.
+    activities_by_id = {
+        a.id: a for a in (await db_session.execute(
+            select(Activity).where(Activity.id.in_(activity_ids))  # type: ignore[union-attr]
+        )).scalars().all()
+    }
+    skipped_assignments = [
+        aid for aid in activity_ids
+        if aid not in already_completed and activities_by_id.get(aid) is not None
+        and activities_by_id[aid].activity_type == ActivityTypeEnum.TYPE_ASSIGNMENT
+    ]
+    incomplete_steps = {
+        s.activity_id: s for s in (await db_session.execute(
+            select(TrailStep).where(
+                TrailStep.user_id == user_id,
+                TrailStep.course_id == course.id,
+                TrailStep.complete == False,  # noqa: E712
+            )
+        )).scalars().all()
+    }
+    newly_completed: list[int] = []
+
     new_count = 0
     for activity_id in activity_ids:
+        if activity_id in skipped_assignments or activity_id in already_completed:
+            continue
+        if activity_id in incomplete_steps:
+            step = incomplete_steps[activity_id]
+            step.complete = True
+            step.update_date = str(datetime.now())
+            db_session.add(step)
+            new_count += 1
+            newly_completed.append(activity_id)
+            continue
         if activity_id not in already_completed:
+            newly_completed.append(activity_id)
             step = TrailStep(
                 trailrun_id=trailrun.id if trailrun.id is not None else 0,
                 activity_id=activity_id,
@@ -976,6 +1033,11 @@ async def complete_course(
             new_count += 1
 
     await db_session.commit()
+
+    for activity_id in newly_completed:  # Rescue Ready fork
+        act = activities_by_id.get(activity_id)
+        if act is not None:
+            await _rr_record_completed(user_id, course, act.activity_uuid, act.activity_type)
 
     # Create the certificate if eligible. Its return value means "a NEW
     # certificate row was created", so it maps to certificate_awarded, NOT to
@@ -996,6 +1058,8 @@ async def complete_course(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        if newly_completed:  # Rescue Ready fork: record only the transition
+            await _rr_record_course_completed(user_id, course)
 
     return {
         "course_uuid": course_uuid,
@@ -1003,6 +1067,7 @@ async def complete_course(
         "completed_count": new_count,
         "already_completed_count": len(already_completed),
         "total_activities": len(activity_ids),
+        "skipped_assignments": len(skipped_assignments),  # Rescue Ready fork
         "course_completed": course_completed,
         "certificate_awarded": certificate_awarded,
     }

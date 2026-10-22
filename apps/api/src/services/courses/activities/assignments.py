@@ -4309,22 +4309,18 @@ async def mark_activity_as_done_for_user(
             detail="User not enrolled in the course",
         )
 
-    # Rescue Ready fork: the instructor override goes through the same
-    # completion path as a pass, so it leaves an activity_completed audit row
-    # (marked source="instructor") and fires COURSE_COMPLETED on a transition.
-    await _rr_sync_assignment_completion(
-        request, assignment, course, user_id, True, None, db_session,
-        source="instructor",
+    # Rescue Ready fork (owner decision): an assignment is complete only when
+    # passed, so the "mark as done" override is refused for assignments. The
+    # instructor changes the grade instead (graded, audited, and it drives
+    # completion) or grants another attempt. This route only ever serves
+    # assignments; the checks above still run so callers get the same 403/404s.
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Assignments are completed by a passing grade. Set the grade, or allow "
+            "another attempt, instead of marking it done."
+        ),
     )
-
-    # Check if all activities in the course are completed and create certificate if so
-    if course and course.id:
-        await check_course_completion_and_create_certificate(
-            request, user_id, course.id, db_session
-        )
-
-    # return OK
-    return {"message": "Activity marked as done for user"}
 
 
 async def get_assignments_from_course(

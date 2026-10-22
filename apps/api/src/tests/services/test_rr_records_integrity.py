@@ -312,3 +312,97 @@ class TestRegradeProvenance:
         assert graded[-1]["metadata"]["auto_graded"] is False
         completed = _audits(env, UserAuditEventType.ACTIVITY_COMPLETED)
         assert [c["metadata"]["completed_by"] for c in completed] == ["regrade"]
+
+
+# ---------------------------------------------------------------------------
+# Mark-done: refused on assignments, allowed (and recorded) on other activities
+# ---------------------------------------------------------------------------
+
+
+async def _add_activity(db, org, course, chapter, activity_id, *, assignment):
+    from datetime import datetime
+
+    from src.db.courses.activities import Activity, ActivitySubTypeEnum, ActivityTypeEnum
+    from src.db.courses.chapter_activities import ChapterActivity
+
+    now = str(datetime.now())
+    a = Activity(
+        id=activity_id, name=f"A{activity_id}",
+        activity_type=ActivityTypeEnum.TYPE_ASSIGNMENT if assignment else ActivityTypeEnum.TYPE_DOCUMENT,
+        activity_sub_type=(ActivitySubTypeEnum.SUBTYPE_ASSIGNMENT_ANY if assignment
+                           else ActivitySubTypeEnum.SUBTYPE_DOCUMENT_PDF),
+        content={}, published=True, org_id=org.id, course_id=course.id,
+        activity_uuid=f"activity_rr_{activity_id}", creation_date=now, update_date=now,
+    )
+    db.add(a)
+    db.add(ChapterActivity(order=activity_id, chapter_id=chapter.id, activity_id=activity_id,
+                           course_id=course.id, org_id=org.id, creation_date=now, update_date=now))
+    await db.commit()
+    return a
+
+
+async def _complete_steps(db, user_id):
+    from src.db.trail_steps import TrailStep
+
+    return {s.activity_id for s in (await db.execute(select(TrailStep).where(
+        TrailStep.user_id == user_id, TrailStep.complete == True,  # noqa: E712
+    ))).scalars().all()}
+
+
+class TestAdminMarkDone:
+    async def test_complete_activity_refuses_assignment_allows_document(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, org, course, chapter,
+        regular_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.admin.admin import complete_activity
+
+        user_id = regular_user.id
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        quiz = await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid, quiz_uuid = doc.activity_uuid, quiz.activity_uuid
+
+        with pytest.raises(HTTPException) as exc:
+            await complete_activity(mock_request, token_user, user_id, quiz_uuid, db)
+        assert exc.value.status_code == 400
+
+        await complete_activity(mock_request, token_user, user_id, doc_uuid, db)
+        assert await _complete_steps(db, user_id) == {50}
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [(r.target_uuid, r.audit_metadata["completed_by"]) for r in rows] == [
+            (doc_uuid, "admin_api")
+        ]
+
+    async def test_complete_course_leaves_unpassed_assignment_incomplete(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, org, course, chapter,
+        regular_user,
+    ):
+        from src.services.admin.admin import complete_course
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid = doc.activity_uuid
+
+        result = await complete_course(mock_request, token_user, user_id, course_uuid, db)
+        assert result["skipped_assignments"] == 1 and result["course_completed"] is False
+        assert await _complete_steps(db, user_id) == {50}
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [r.target_uuid for r in rows] == [doc_uuid]
+
+    async def test_student_cannot_self_complete_assignment_but_can_a_document(
+        self, delete_rbac, db, mock_request, org, course, chapter, regular_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.trail.trail import add_activity_to_trail
+
+        doc = await _add_activity(db, org, course, chapter, 50, assignment=False)
+        quiz = await _add_activity(db, org, course, chapter, 51, assignment=True)
+        doc_uuid, quiz_uuid, user_id = doc.activity_uuid, quiz.activity_uuid, regular_user.id
+        with pytest.raises(HTTPException) as exc:
+            await add_activity_to_trail(mock_request, regular_user, quiz_uuid, db)
+        assert exc.value.status_code == 400
+        await add_activity_to_trail(mock_request, regular_user, doc_uuid, db)
+        assert await _complete_steps(db, user_id) == {50}

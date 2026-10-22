@@ -1206,7 +1206,7 @@ class TestMarkActivityAsDoneForUser:
                 )
         assert exc.value.status_code == 404
 
-    async def test_marks_activity_done(
+    async def test_refuses_to_mark_assignment_done(
         self,
         mock_request,
         db,
@@ -1217,21 +1217,25 @@ class TestMarkActivityAsDoneForUser:
         admin_user,
         regular_user,
     ):
+        # Rescue Ready fork (owner decision): assignments complete only on a
+        # pass, so the instructor override is refused and the step stays as is.
         _, _, step = await _make_trail(
             db, org.id, course.id, activity.id, regular_user.id
         )
+        was_complete = step.complete
         with patch(_PATCH_RBAC, new_callable=AsyncMock), \
              patch(_PATCH_CERT, new_callable=AsyncMock):
-            result = await mark_activity_as_done_for_user(
-                mock_request,
-                regular_user.id,
-                assignment.assignment_uuid,
-                admin_user,
-                db,
-            )
-        assert result["message"] == "Activity marked as done for user"
+            with pytest.raises(HTTPException) as exc:
+                await mark_activity_as_done_for_user(
+                    mock_request,
+                    regular_user.id,
+                    assignment.assignment_uuid,
+                    admin_user,
+                    db,
+                )
+        assert exc.value.status_code == 400
         await db.refresh(step)
-        assert step.complete is True
+        assert step.complete is was_complete
 
 
 # ---------------------------------------------------------------------------
