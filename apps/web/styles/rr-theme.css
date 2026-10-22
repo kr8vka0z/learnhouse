@@ -51,8 +51,11 @@ html:root {
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-rr-heading), var(--font-default), sans-serif;
   }
-  /* Sora has no Arabic glyphs; RTL headings keep the inherited Tajawal. */
-  [dir='rtl'] :is(h1, h2, h3, h4, h5, h6) {
+  /* Sora has no Arabic glyphs; RTL headings keep the inherited Tajawal. And
+     when staff pick a custom font (org settings), the withmenu layout sets it
+     as an inline font-family on .lh-org-font-root; headings inherit it then. */
+  [dir='rtl'] :is(h1, h2, h3, h4, h5, h6),
+  .lh-org-font-root[style*='font-family'] :is(h1, h2, h3, h4, h5, h6) {
     font-family: inherit;
   }
 }
