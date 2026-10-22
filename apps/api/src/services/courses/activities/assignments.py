@@ -62,6 +62,12 @@ from src.security.rbac import (
 )
 from src.services.ai.rag.queue import index_activity
 from src.services.courses.activities.access import verify_activity_reader_access
+# Rescue Ready fork: essay questions (CUSTOM tasks with contents.kind == "essay").
+from src.services.courses.activities.essay import (
+    ESSAY_SNAPSHOT_MAX_CHARS,
+    check_essay_word_limits,
+    is_essay_task,
+)
 from src.services.courses.activities.uploads.sub_file import upload_submission_file
 from src.services.courses.activities.uploads.tasks_ref_files import (
     upload_reference_file,
@@ -3011,6 +3017,10 @@ async def create_assignment_submission(
                 detail="Assignment User Submission already exists",
             )
 
+    # Rescue Ready fork: essay word limits are checked at hand-in, before
+    # anything is written, so a refused hand-in leaves no trace.
+    await check_essay_word_limits(assignment.id, int(submitter.id), db_session)
+
     # Either reuse the existing PENDING row (retry path) or create a fresh
     # submission. On the retry path we keep the original
     # assignmentusersubmission_uuid so external systems that already store a
@@ -4383,7 +4393,7 @@ async def get_assignments_from_course(
 _RR_ANSWER_SNAPSHOT_MAX_CHARS = 8000
 
 
-def _rr_cap_answer(answer):
+def _rr_cap_answer(answer, max_chars: int = _RR_ANSWER_SNAPSHOT_MAX_CHARS):
     """Return ``answer`` unchanged if small, else a size marker."""
     import json
 
@@ -4391,7 +4401,7 @@ def _rr_cap_answer(answer):
         size = len(json.dumps(answer, default=str))
     except Exception:
         return {"_unserializable": True}
-    if size > _RR_ANSWER_SNAPSHOT_MAX_CHARS:
+    if size > max_chars:
         return {"_truncated": True, "size_chars": size}
     return answer
 
@@ -4424,7 +4434,11 @@ async def _rr_snapshot_task_answers(
             "task_uuid": task.assignment_task_uuid,
             "title": task.title,
             "type": str(getattr(task.assignment_type, "value", task.assignment_type)),
-            "answer": _rr_cap_answer(ts.task_submission) if ts else None,
+            # Essays get a larger cap: the essay text is the whole answer.
+            "answer": _rr_cap_answer(
+                ts.task_submission,
+                ESSAY_SNAPSHOT_MAX_CHARS if is_essay_task(task) else _RR_ANSWER_SNAPSHOT_MAX_CHARS,
+            ) if ts else None,
         })
     return snapshot
 
