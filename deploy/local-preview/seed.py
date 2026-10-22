@@ -375,7 +375,8 @@ def upload_image(tok, org_id, endpoint, field, path):
 
 def brand_org(tok, org):
     """White-label the org: brand color, no "Powered by" watermark (site and
-    email), mail sender name = org name, AI features off, and the logo files
+    email), mail sender name = org name, AI and unused features off (only
+    Courses stays in the menu), and the logo files
     when given.
     Idempotent, so it also runs on an already-seeded stack."""
     org_id = org["id"]
@@ -386,6 +387,11 @@ def brand_org(tok, org):
     # No AI key in a preview: turn the org's AI features off (same switch as
     # Settings > AI), which also removes the "Ask AI" button for students.
     call("PUT", f"/orgs/{org_id}/config/ai?ai_enabled=false&copilot_enabled=false", tok)
+    # Features the school doesn't use, off through the same per-feature
+    # switches as the dashboard, so the student menu shows only Courses.
+    # "folders" is the Library.
+    for feature in ("communities", "folders", "podcasts", "boards", "playgrounds"):
+        call("PUT", f"/orgs/{org_id}/config/{feature}?{feature}_enabled=false", tok)
     for path, endpoint, field in ((LOGO_FILE, "logo", "logo_file"),
                                   (SQUARE_LOGO_FILE, "square_logo", "square_logo_file"),
                                   # The thumbnail is the org's link-preview image.

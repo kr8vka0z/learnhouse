@@ -26,7 +26,9 @@ All commands run from this folder. Use `sudo docker` if your user isn't in the
   It first brands the org through the org-settings endpoints: menu bar color
   (`PREVIEW_BRAND_COLOR`, default navy), the "Powered by" watermark off (site
   and email), the email sender name set to the org name, AI features off (a
-  preview has no AI key; Settings > AI turns them back on), and logo files when
+  preview has no AI key; Settings > AI turns them back on), communities,
+  library, podcasts, boards and playgrounds off (the student menu shows only
+  Courses; each has its own switch in the dashboard), and logo files when
   given: `PREVIEW_LOGO_FILE` (wide, light-on-dark, for the colored menu bar),
   `PREVIEW_SQUARE_LOGO_FILE` (sign-in panel, dashboard) and
   `PREVIEW_FAVICON_FILE`. PNG, JPG or WebP; SVG is refused. Set them in `.env`
