@@ -53,17 +53,18 @@ async def _require_admin(current_user, org_id: int, db_session: AsyncSession) ->
 
 
 async def _enforce_plan(org_id: int, db_session: AsyncSession) -> None:
-    """Gate the audit feature behind the Pro plan."""
-    from src.security.features_utils.plan_check import _check_mode_bypass
+    """Gate the audit feature behind the Pro plan.
 
-    bypass = _check_mode_bypass("analytics_advanced")
-    if bypass is None:  # SaaS mode: enforce plan
-        current_plan = await get_org_plan(org_id, db_session)
-        if not plan_meets_requirement(current_plan, "pro"):
-            raise HTTPException(
-                status_code=403,
-                detail="Student audit & analytics requires a Pro plan or higher.",
-            )
+    Rescue Ready fork: skip the analytics_advanced mode bypass, which 403s in
+    OSS mode (it is EE-only). The plan check alone passes in OSS mode, so the
+    student-records dossier/export works without opening Tinybird analytics.
+    """
+    current_plan = await get_org_plan(org_id, db_session)
+    if not plan_meets_requirement(current_plan, "pro"):
+        raise HTTPException(
+            status_code=403,
+            detail="Student audit & analytics requires a Pro plan or higher.",
+        )
 
 
 async def _org_member_ids(
