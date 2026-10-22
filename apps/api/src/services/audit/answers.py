@@ -136,12 +136,12 @@ def answer_digest(submission: Any) -> str | None:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _text(value: Any, limit: int = MAX_TEXT) -> str:
+def _text(value: Any, limit: int | None = MAX_TEXT) -> str:
     if value is None:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = text.strip()
-    if len(text) > limit:
+    if limit is not None and len(text) > limit:
         return text[:limit] + "…"
     return text
 
@@ -532,6 +532,11 @@ def _raw(assignment_type: Any, submission: Any, fallback_prompt: str = "") -> di
     to fall back to ``JSON.stringify``.
     """
     items: list[dict] = []
+    # Rescue Ready fork: a CUSTOM task's values are what the student wrote (an
+    # essay can run to ~100k characters) and this dossier is the official record,
+    # so they are never cut. The 2000-char cap still applies to OTHER and to the
+    # malformed-built-in fallback, where the value is not the learner's own text.
+    text_limit = None if _type_value(assignment_type) == "CUSTOM" else MAX_TEXT
 
     def walk(value: Any, path: str, depth: int) -> None:
         if len(items) >= MAX_ITEMS:
@@ -547,7 +552,7 @@ def _raw(assignment_type: Any, submission: Any, fallback_prompt: str = "") -> di
                 _item(
                     index=len(items) + 1,
                     prompt=path or fallback_prompt or "Value",
-                    answer_text=_text(value),
+                    answer_text=_text(value, text_limit),
                 )
             )
 

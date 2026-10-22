@@ -60,6 +60,16 @@ class TestAuditWriter:
         assert lost and "magic_link" in lost[0].getMessage()
 
 
+class TestRecordShowsWholeAnswer:
+    def test_long_custom_answer_is_not_cut_in_the_dossier(self):
+        # An essay is a CUSTOM task; the dossier is the official record.
+        from src.services.audit.answers import humanize_task_answer
+
+        essay = ("word " * 20_000).strip()  # ~100k characters
+        out = humanize_task_answer("CUSTOM", {"kind": "essay"}, {"answer": essay})
+        assert [i["answer_text"] for i in out["items"]] == [essay]
+
+
 # ---------------------------------------------------------------------------
 # Every sign-in path writes LOGIN
 # ---------------------------------------------------------------------------

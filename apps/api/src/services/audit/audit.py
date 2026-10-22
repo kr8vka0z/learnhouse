@@ -107,7 +107,9 @@ async def record_audit_event(
 
 
 def _event_for_log(event_type, user_id, org_id, ip, user_agent, target_uuid, metadata) -> str:
-    """JSON of a lost audit event, capped so one huge answer can't flood the log."""
+    """JSON of a lost audit event. The cap sits above the largest answer snapshot
+    an attempt carries (essays, ~100k characters) so the line is enough to
+    re-enter the row; it only stops a pathological payload flooding the log."""
     import json
     from datetime import datetime, timezone
 
@@ -120,4 +122,4 @@ def _event_for_log(event_type, user_id, org_id, ip, user_agent, target_uuid, met
         }, default=str)
     except Exception:
         text = repr((event_type, user_id, org_id, target_uuid, metadata))
-    return text[:8000]
+    return text[:500_000]

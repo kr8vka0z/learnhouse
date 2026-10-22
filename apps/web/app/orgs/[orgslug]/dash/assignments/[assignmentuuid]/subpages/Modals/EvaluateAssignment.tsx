@@ -17,7 +17,7 @@ import TaskEssayObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskEss
 import { isEssayTask } from '@/lib/assignments/essay';
 import { useOrg } from '@components/Contexts/OrgContext';
 import { getTaskRefFileDir } from '@services/media/media';
-import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, putFinalGrade } from '@services/courses/assignments';
+import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, markActivityAsDoneForUser, putFinalGrade } from '@services/courses/assignments';
 import { useLHSession } from '@components/Contexts/LHSessionContext';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
