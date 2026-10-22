@@ -2,7 +2,12 @@ import React from 'react'
 import YouTube from 'react-youtube'
 import { useRouter } from 'next/navigation'
 import { useTranslation } from 'react-i18next'
-import { useOrg } from '@components/Contexts/OrgContext'
+import { useOrg, useOrgMembership } from '@components/Contexts/OrgContext'
+import { useLHSession } from '@components/Contexts/LHSessionContext'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query/keys'
+import { markActivityAsComplete } from '@services/courses/activity'
+import { WATCHED_FRACTION, createPlayClock, isVideoWatched, playedSeconds, watchSpan } from '@/lib/video/watchCompletion'
 import { getUriWithOrg } from '@services/config/config'
 import { getCourseThumbnailMediaDirectory } from '@services/media/media'
 import LearnHousePlayer, { type PlayerNavItem } from './LearnHousePlayer'
@@ -91,6 +96,50 @@ function VideoActivity({ activity, course, orgUuid }: VideoActivityProps) {
       setVideoId(getYouTubeID(activity.content.uri))
     }
   }, [activity, org])
+
+  // Rescue Ready fork: watching the video to the end marks the activity
+  // complete through the same endpoint as the learner's checkbox (which stays).
+  // Members only, like the checkbox; once per page view; the server call is
+  // idempotent anyway.
+  const session = useLHSession() as any
+  const { isUserPartOfTheOrg } = useOrgMembership()
+  const queryClient = useQueryClient()
+  const accessToken = session?.data?.tokens?.access_token
+  const completionSent = React.useRef(false)
+  const completeFromPlayer = React.useCallback(async () => {
+    if (completionSent.current || !accessToken || !isUserPartOfTheOrg || !org?.id) return
+    completionSent.current = true
+    try {
+      const trail: any = await markActivityAsComplete(org.slug, course.course_uuid, activity.activity_uuid, accessToken)
+      if (trail?.runs) queryClient.setQueryData(queryKeys.trail.org(org.id), trail)
+    } catch {
+      completionSent.current = false // let a later "end" retry
+    }
+  }, [accessToken, isUserPartOfTheOrg, org?.id, org?.slug, course?.course_uuid, activity.activity_uuid, queryClient])
+
+  React.useEffect(() => {
+    if (!videoEl || activity.activity_sub_type !== 'SUBTYPE_VIDEO_HOSTED') return
+    const check = () => {
+      if (isVideoWatched({
+        currentTime: videoEl.currentTime,
+        duration: videoEl.duration,
+        played: playedSeconds(videoEl.played),
+        ended: videoEl.ended,
+        startTime: details?.startTime,
+        endTime: details?.endTime,
+      })) completeFromPlayer()
+    }
+    videoEl.addEventListener('timeupdate', check)
+    videoEl.addEventListener('ended', check)
+    return () => {
+      videoEl.removeEventListener('timeupdate', check)
+      videoEl.removeEventListener('ended', check)
+    }
+  }, [videoEl, activity.activity_sub_type, details?.startTime, details?.endTime, completeFromPlayer])
+
+  // YouTube's iframe has play/pause/end events but no `played` ranges, so time
+  // spent playing stands in for them as the seek-to-end guard.
+  const youtubeClock = React.useMemo(() => createPlayClock(), [activity.activity_uuid])
 
   // Prefer adaptive HLS once transcoding is ready; otherwise fall back to the
   // (optimized) progressive MP4 so playback always works.
@@ -237,6 +286,13 @@ function VideoActivity({ activity, course, orgUuid }: VideoActivityProps) {
                     if (activity.details?.startTime) {
                       event.target.seekTo(activity.details.startTime, true)
                     }
+                  }}
+                  onPlay={(event) => youtubeClock.play(event.target.getPlaybackRate?.() || 1)}
+                  onPause={() => youtubeClock.pause()}
+                  onEnd={(event) => {
+                    youtubeClock.pause()
+                    const span = watchSpan(event.target.getDuration(), activity.details?.startTime, activity.details?.endTime)
+                    if (span > 0 && youtubeClock.seconds() >= span * WATCHED_FRACTION) completeFromPlayer()
                   }}
                 />
               </div>
