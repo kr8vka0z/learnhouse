@@ -36,6 +36,13 @@ class UserAuditEventType:
     COURSE_ENROLLED = "course_enrolled"
     ACTIVITY_COMPLETED = "activity_completed"
     COURSE_COMPLETED = "course_completed"
+    # Rescue Ready fork: the school undid part of this student's record through
+    # the admin API. These delete enrollment/completion rows outright, so without
+    # an audit row the record would lose them with no trace. Recorded on the
+    # STUDENT's log (user_id = student); the acting token is in metadata.
+    COURSE_UNENROLLED = "course_unenrolled"
+    ACTIVITY_UNCOMPLETED = "activity_uncompleted"
+    COURSE_PROGRESS_RESET = "course_progress_reset"
 
     # Assessments (student side). These matter most for the durable log because
     # assignment retries reset the live submission row in place; the grade a

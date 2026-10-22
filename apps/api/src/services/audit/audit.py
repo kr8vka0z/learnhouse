@@ -109,6 +109,33 @@ async def record_audit_event(
             )
 
 
+async def record_removal_event(
+    *,
+    event_type: str,
+    user_id: int,
+    course,
+    target_uuid: str,
+    removed_by: str,
+    **details,
+) -> None:
+    """Rescue Ready fork: audit row for an action that deletes part of a
+    student's record (unenroll, uncomplete, progress reset), by the student or
+    the school. The deleted rows leave no other trace, so ``details`` should say
+    what was removed (counts, previous status). Call after the delete commits."""
+    await record_audit_event(
+        event_type=event_type,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=target_uuid,
+        metadata={
+            "course_uuid": course.course_uuid,
+            "course_name": course.name,
+            "removed_by": removed_by,
+            **details,
+        },
+    )
+
+
 _RETRY_DELAY_SECONDS = 0.2
 
 # Scalar metadata copied into the lost-event log line: enough to know which
@@ -118,6 +145,8 @@ _LOGGED_METADATA_FIELDS = (
     "attempt_number", "grade", "max_grade", "percentage", "display_grade",
     "letter_grade", "passed", "auto_graded", "grade_source", "completed_by",
     "method", "enrolled_by", "course_uuid", "assignment_uuid", "activity_type",
+    "removed_by", "api_token_id", "steps_deleted", "completed_steps_deleted",
+    "was_complete", "previous_status",
 )
 _LOG_LINE_CAP = 4000  # far below journald's 48 KiB line limit
 

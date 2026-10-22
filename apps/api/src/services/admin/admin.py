@@ -54,7 +54,7 @@ from src.services.analytics.analytics import track
 from src.services.analytics import events as analytics_events
 from src.services.webhooks.dispatch import dispatch_webhooks
 # Rescue Ready fork: admin-API enrollment/completion writes the student record.
-from src.services.audit.audit import record_audit_event
+from src.services.audit.audit import record_audit_event, record_removal_event
 from src.db.user_audit_events import UserAuditEventType
 from src.security.auth import create_access_token
 from src.security.org_auth import org_owns_account
@@ -505,6 +505,37 @@ async def _rr_record_course_completed(user_id: int, course: Course) -> None:
     )
 
 
+async def _rr_record_undo(
+    event_type: str,
+    token_user: APITokenUser,
+    user_id: int,
+    course: Course,
+    target_uuid: str,
+    **details,
+) -> None:
+    """Rescue Ready fork: audit row for an admin-API action that removes part of
+    a student's record (unenroll, uncomplete, progress reset). Those rows are
+    deleted outright, so this row is the only trace they ever existed. Written
+    after the caller's commit, like the other admin-API audit rows."""
+    await record_removal_event(
+        event_type=event_type,
+        user_id=user_id,
+        course=course,
+        target_uuid=target_uuid,
+        removed_by="admin_api",
+        api_token_id=getattr(token_user, "id", None),
+        api_token_created_by_user_id=getattr(token_user, "created_by_user_id", None),
+        **details,
+    )
+
+
+def _rr_enum_str(value) -> Optional[str]:
+    """Rescue Ready fork: enum or plain value as a string for audit metadata."""
+    if value is None:
+        return None
+    return value.value if hasattr(value, "value") else str(value)
+
+
 async def enroll_user(
     request: Request,
     token_user: APITokenUser,
@@ -617,11 +648,22 @@ async def unenroll_user(
             TrailStep.org_id == token_user.org_id,
         )
     )).scalars().all()
+    # Rescue Ready fork: tally what is being removed before it is gone.
+    removed = {
+        "steps_deleted": len(steps),
+        "completed_steps_deleted": sum(1 for s in steps if s.complete),
+        "previous_status": _rr_enum_str(trail_run.status),
+    }
     for step in steps:
         await db_session.delete(step)
 
     await db_session.delete(trail_run)
     await db_session.commit()
+
+    await _rr_record_undo(  # Rescue Ready fork
+        UserAuditEventType.COURSE_UNENROLLED, token_user, user_id, course,
+        course.course_uuid, **removed,
+    )
 
     return {"detail": "User unenrolled successfully"}
 
@@ -885,8 +927,19 @@ async def uncomplete_activity(
     )).scalars().first()
 
     if step:
+        was_complete = bool(step.complete)  # Rescue Ready fork: for the audit row
         await db_session.delete(step)
         await db_session.commit()
+        # Rescue Ready fork: only when a step was actually removed, and right
+        # after the delete commits, so a failure in the status sync below can't
+        # leave a committed removal with no audit row.
+        await _rr_record_undo(
+            UserAuditEventType.ACTIVITY_UNCOMPLETED, token_user, user_id, course,
+            activity_uuid,
+            activity_name=activity.name,
+            activity_type=_rr_enum_str(activity.activity_type),
+            was_complete=was_complete,
+        )
         # Completion may have been lost; demote the enrollment so analytics
         # stop counting it as completed.
         if course.id:
@@ -2082,6 +2135,7 @@ async def reset_user_progress(
             TrailStep.org_id == token_user.org_id,
         )
     )).scalars().all()
+    completed_deleted = sum(1 for s in steps if s.complete)  # Rescue Ready fork
     deleted = 0
     for step in steps:
         await db_session.delete(step)
@@ -2094,13 +2148,28 @@ async def reset_user_progress(
             TrailRun.org_id == token_user.org_id,
         )
     )).scalars().first()
+    previous_status = None  # Rescue Ready fork
     if trail_run:
         from src.db.trail_runs import StatusEnum
+        previous_status = _rr_enum_str(trail_run.status)
         trail_run.status = StatusEnum.STATUS_IN_PROGRESS
         trail_run.update_date = str(datetime.now())
         db_session.add(trail_run)
 
     await db_session.commit()
+
+    # Rescue Ready fork: record the reset when it changed anything (steps
+    # removed or the enrollment status moved); a no-op reset leaves no row.
+    # StatusEnum is only reached when previous_status is set, i.e. after the
+    # upstream function-local import above has run.
+    if deleted or (previous_status and previous_status != StatusEnum.STATUS_IN_PROGRESS.value):
+        await _rr_record_undo(
+            UserAuditEventType.COURSE_PROGRESS_RESET, token_user, user_id, course,
+            course.course_uuid,
+            steps_deleted=deleted,
+            completed_steps_deleted=completed_deleted,
+            previous_status=previous_status,
+        )
 
     return {
         "course_uuid": course_uuid,
@@ -2797,6 +2866,33 @@ async def bulk_unenroll_users(
     not_enrolled = [uid for uid in user_ids if uid not in enrolled_ids]
 
     if unenrolled:
+        # Rescue Ready fork: per-student tally of what the bulk delete removes,
+        # for one audit row per affected student.
+        removed: dict[int, dict] = {}
+        for run_user_id, run_status in (await db_session.execute(
+            select(TrailRun.user_id, TrailRun.status).where(
+                TrailRun.course_id == course.id,
+                TrailRun.user_id.in_(unenrolled),
+                TrailRun.org_id == token_user.org_id,
+            )
+        )).all():
+            removed.setdefault(run_user_id, {
+                "steps_deleted": 0, "completed_steps_deleted": 0,
+                "previous_status": _rr_enum_str(run_status),
+            })
+        for step_user_id, step_complete in (await db_session.execute(
+            select(TrailStep.user_id, TrailStep.complete).where(
+                TrailStep.course_id == course.id,
+                TrailStep.user_id.in_(unenrolled),
+                TrailStep.org_id == token_user.org_id,
+            )
+        )).all():
+            tally = removed.setdefault(step_user_id, {
+                "steps_deleted": 0, "completed_steps_deleted": 0, "previous_status": None,
+            })
+            tally["steps_deleted"] += 1
+            tally["completed_steps_deleted"] += 1 if step_complete else 0
+
         await db_session.execute(
             sql_delete(TrailStep).where(
                 TrailStep.course_id == course.id,
@@ -2812,6 +2908,12 @@ async def bulk_unenroll_users(
             )
         )
         await db_session.commit()
+
+        for removed_user_id, tally in removed.items():  # Rescue Ready fork
+            await _rr_record_undo(
+                UserAuditEventType.COURSE_UNENROLLED, token_user, removed_user_id, course,
+                course.course_uuid, **tally,
+            )
 
     return {
         "unenrolled": unenrolled,
