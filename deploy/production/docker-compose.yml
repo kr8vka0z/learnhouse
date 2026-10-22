@@ -1,0 +1,108 @@
+# Production stack (Rescue Ready fork): the fork's single app image plus
+# Postgres (pgvector) and Redis, for one organization behind an HTTPS reverse
+# proxy or tunnel that terminates TLS. Recipe, update and rollback steps:
+# README.md next to this file.
+#
+# Portable by design: copy this file into one data folder (for example
+# /srv/learnhouse), put .env beside it (from .env.example), and everything the
+# instance owns lives under that folder: db/, redis/, content/, backups/.
+# Run every command from that folder so .env and the relative paths resolve:
+#   cd /srv/learnhouse && docker compose up -d
+name: lh-prod
+
+services:
+  learnhouse-app:
+    # Built from this repository and tagged per commit (see README). Changing
+    # the tag in .env and running `up -d` is both the update and the rollback.
+    image: ${LH_IMAGE:?set LH_IMAGE in .env}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      LEARNHOUSE_API_URL: http://localhost:9000
+      LEARNHOUSE_PORT: "9000"
+      LEARNHOUSE_ENV: production
+      NEXT_PUBLIC_LEARNHOUSE_ENV: production
+      # Every public URL is derived from one host name so they can't disagree.
+      LEARNHOUSE_DOMAIN: ${LH_PUBLIC_HOST:?set LH_PUBLIC_HOST in .env}
+      # Without this the API reports the upstream default "localhost:3000" as
+      # the frontend domain and the web app builds links and redirects on it.
+      LEARNHOUSE_FRONTEND_DOMAIN: ${LH_PUBLIC_HOST}
+      LEARNHOUSE_ALLOWED_ORIGINS: https://${LH_PUBLIC_HOST}
+      # TLS ends at the proxy in front, so the app itself only sees http. SSL
+      # makes generated links (invites, password resets) use https; the proxy
+      # must send X-Forwarded-Proto: https for cookies to be marked Secure
+      # (docker/nginx.conf passes an outer proxy's value through).
+      LEARNHOUSE_SSL: "true"
+      # Single tenancy: cookies are host-only on the public host, so no
+      # LEARNHOUSE_COOKIE_DOMAIN is set (single mode ignores it and warns).
+      LEARNHOUSE_TENANCY: single
+      # Off in production: this alone removes /docs, /redoc and /openapi.json
+      # from the API and the development-only EE override.
+      LEARNHOUSE_DEVELOPMENT_MODE: "False"
+      LEARNHOUSE_LOGFIRE_ENABLED: "False"
+      LEARNHOUSE_SQL_CONNECTION_STRING: postgresql://learnhouse:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/learnhouse
+      LEARNHOUSE_REDIS_CONNECTION_STRING: redis://redis:6379/learnhouse
+      LEARNHOUSE_REDIS_URL: redis://redis:6379
+      LEARNHOUSE_CONTENT_DELIVERY_TYPE: filesystem
+      # The collab server rate-limits WebSockets per client IP; behind a proxy
+      # every client would otherwise share the proxy's address.
+      COLLAB_TRUST_PROXY: "true"
+      NEXTAUTH_URL: https://${LH_PUBLIC_HOST}
+      NEXT_PUBLIC_LEARNHOUSE_API_URL: https://${LH_PUBLIC_HOST}/api/v1/
+      NEXT_PUBLIC_LEARNHOUSE_BACKEND_URL: https://${LH_PUBLIC_HOST}/
+      NEXT_PUBLIC_LEARNHOUSE_DOMAIN: ${LH_PUBLIC_HOST}
+      NEXT_PUBLIC_LEARNHOUSE_TOP_DOMAIN: ${LH_TOP_DOMAIN:?set LH_TOP_DOMAIN in .env}
+      NEXT_PUBLIC_LEARNHOUSE_MULTI_ORG: "False"
+      # Must equal the org slug created on first boot.
+      NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LEARNHOUSE_INITIAL_ORG_SLUG:?set LEARNHOUSE_INITIAL_ORG_SLUG in .env}
+      NEXT_PUBLIC_LEARNHOUSE_HTTPS: "true"
+      NEXT_PUBLIC_COLLAB_URL: wss://${LH_PUBLIC_HOST}/collab
+    # Loopback only: the proxy or tunnel on this machine is the one way in.
+    # No ssr-fwd sidecar (unlike the local preview): server-side rendering
+    # fetches the public https URL, which goes back out through the proxy.
+    ports:
+      - "127.0.0.1:${LH_HTTP_PORT:-3330}:80"
+    volumes:
+      - ./content:/app/api/content
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Not published on any host port; only the app reaches it.
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: learnhouse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: learnhouse
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnhouse"]
+      interval: 5s
+      timeout: 4s
+      retries: 5
+
+  # Cache, sessions and collab state; not published on any host port.
+  redis:
+    image: redis:7.2.3-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 4s
+      retries: 5
