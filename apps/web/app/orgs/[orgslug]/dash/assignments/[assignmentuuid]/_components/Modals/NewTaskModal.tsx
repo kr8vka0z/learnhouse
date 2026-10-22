@@ -6,6 +6,7 @@ import {
   FileArrowUp,
   Hash,
   ListChecks,
+  NotePencil,
   PencilSimple,
   TextAa,
 } from '@phosphor-icons/react'
@@ -28,6 +29,11 @@ type TaskTypeConfig = {
   titleColor: string
   bgClass: string
   stripeRgb: string
+  // Rescue Ready fork: initial `contents`. The essay card creates a CUSTOM task
+  // marked kind 'essay' (no new task-type enum value needed).
+  contents?: Record<string, unknown>
+  defaultLabel?: string
+  defaultDesc?: string
 }
 
 const TASK_TYPES: TaskTypeConfig[] = [
@@ -91,6 +97,19 @@ const TASK_TYPES: TaskTypeConfig[] = [
     bgClass: 'bg-amber-50',
     stripeRgb: '253, 230, 138',
   },
+  {
+    value: 'CUSTOM',
+    contents: { kind: 'essay', prompt: '' },
+    Icon: NotePencil,
+    labelKey: 'dashboard.assignments.editor.task_types.essay.title',
+    descKey: 'dashboard.assignments.editor.task_types.essay.description',
+    defaultLabel: 'Essay',
+    defaultDesc: 'A long written answer you grade yourself.',
+    iconColor: 'text-indigo-500',
+    titleColor: 'text-indigo-900',
+    bgClass: 'bg-indigo-50',
+    stripeRgb: '199, 210, 254',
+  },
 ]
 
 function NewTaskModal({ closeModal, assignment_uuid }: any) {
@@ -113,14 +132,14 @@ function NewTaskModal({ closeModal, assignment_uuid }: any) {
     }
   }
 
-  async function createTask(type: string) {
+  async function createTask(type: string, contents: Record<string, unknown> = {}) {
     const task_object = {
       title: "Untitled Task",
       description: "",
       hint: "",
       reference_file: "",
       assignment_type: type,
-      contents: {},
+      contents,
       max_grade_value: 100,
     }
     const existingTasks = queryClient.getQueryData<any[]>(queryKeys.assignments.tasks(assignment_uuid))
@@ -144,7 +163,7 @@ function NewTaskModal({ closeModal, assignment_uuid }: any) {
           <button
             key={type.value}
             type="button"
-            onClick={() => createTask(type.value)}
+            onClick={() => createTask(type.value, type.contents)}
             className={`relative flex flex-col items-center text-center p-5 rounded-xl nice-shadow cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] overflow-hidden ${type.bgClass}`}
             style={{
               backgroundImage: `repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(${type.stripeRgb},0.5) 5px, rgba(${type.stripeRgb},0.5) 6px)`,
@@ -154,10 +173,10 @@ function NewTaskModal({ closeModal, assignment_uuid }: any) {
               <IconComponent size={28} weight="duotone" />
             </div>
             <p className={`text-sm font-bold ${type.titleColor}`}>
-              {t(type.labelKey)}
+              {t(type.labelKey, { defaultValue: type.defaultLabel })}
             </p>
             <p className="text-[11px] text-gray-600 leading-tight mt-1 max-w-[180px]">
-              {t(type.descKey)}
+              {t(type.descKey, { defaultValue: type.defaultDesc })}
             </p>
           </button>
         )

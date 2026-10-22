@@ -7,6 +7,8 @@ import TaskFormObject from './TaskTypes/TaskFormObject';
 import TaskCodeObject from './TaskTypes/TaskCodeObject';
 import TaskShortAnswerObject from './TaskTypes/TaskShortAnswerObject';
 import TaskNumberAnswerObject from './TaskTypes/TaskNumberAnswerObject';
+import TaskEssayObject from './TaskTypes/TaskEssayObject';
+import { isEssayTask } from '@/lib/assignments/essay';
 
 function AssignmentTaskContentEdit() {
     const session = useLHSession() as any;
@@ -26,6 +28,8 @@ function AssignmentTaskContentEdit() {
             {assignment_task?.assignmentTask.assignment_type === 'CODE' && <TaskCodeObject view='teacher' />}
             {assignment_task?.assignmentTask.assignment_type === 'SHORT_ANSWER' && <TaskShortAnswerObject view='teacher' />}
             {assignment_task?.assignmentTask.assignment_type === 'NUMBER_ANSWER' && <TaskNumberAnswerObject view='teacher' />}
+            {/* Rescue Ready fork: essay = CUSTOM task with contents.kind 'essay'; other CUSTOM tasks stay headless. */}
+            {isEssayTask(assignment_task?.assignmentTask) && <TaskEssayObject view='teacher' />}
         </div>
     )
 }

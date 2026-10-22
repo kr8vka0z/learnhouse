@@ -12,6 +12,9 @@ import TaskFormObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskForm
 import TaskCodeObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskCodeObject';
 import TaskShortAnswerObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskShortAnswerObject';
 import TaskNumberAnswerObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskNumberAnswerObject';
+// Rescue Ready fork: essay grading view.
+import TaskEssayObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskEssayObject';
+import { isEssayTask } from '@/lib/assignments/essay';
 import { useOrg } from '@components/Contexts/OrgContext';
 import { getTaskRefFileDir } from '@services/media/media';
 import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, markActivityAsDoneForUser, putFinalGrade } from '@services/courses/assignments';
@@ -374,6 +377,7 @@ function EvaluateAssignment({ user_id }: any) {
                             {task.assignment_type === 'CODE' && <TaskCodeObject key={task.assignment_task_uuid} view='grading' user_id={user_id} assignmentTaskUUID={task.assignment_task_uuid} onGraded={refreshGradePreview} />}
                             {task.assignment_type === 'SHORT_ANSWER' && <TaskShortAnswerObject key={task.assignment_task_uuid} view='grading' user_id={user_id} assignmentTaskUUID={task.assignment_task_uuid} onGraded={refreshGradePreview} />}
                             {task.assignment_type === 'NUMBER_ANSWER' && <TaskNumberAnswerObject key={task.assignment_task_uuid} view='grading' user_id={user_id} assignmentTaskUUID={task.assignment_task_uuid} onGraded={refreshGradePreview} />}
+                            {isEssayTask(task) && <TaskEssayObject key={task.assignment_task_uuid} view='grading' user_id={user_id} assignmentTaskUUID={task.assignment_task_uuid} onGraded={refreshGradePreview} />}
                         </div>
                     </div>
                     );

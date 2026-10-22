@@ -1,6 +1,6 @@
 import { useAssignments } from '@components/Contexts/Assignments/AssignmentContext'
 import Modal from '@components/Objects/StyledElements/Modal/Modal';
-import { Clock, Code2, FileUp, GripVertical, Hash, ListTodo, Pencil, Plus, Sparkles, Type } from 'lucide-react';
+import { Clock, Code2, FileUp, GripVertical, Hash, ListTodo, NotebookPen, Pencil, Plus, Sparkles, Type } from 'lucide-react';
 import React from 'react'
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd'
 import { useQueryClient } from '@tanstack/react-query'
@@ -14,6 +14,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import { useLHSession } from '@components/Contexts/LHSessionContext'
 import { queryKeys } from '@/lib/query/keys'
 import { moveTask, sortTasksByOrder } from '@/lib/assignments/taskOrder'
+import { isEssayTask } from '@/lib/assignments/essay'
 import { reorderAssignmentTasks } from '@services/courses/assignments'
 
 dayjs.extend(relativeTime)
@@ -145,7 +146,10 @@ function AssignmentTasks({ assignment_uuid }: any) {
                     className='flex flex-col'
                 >
                 {tasks.map((task: any, index: number) => {
-                    const meta = TASK_TYPE_META[task.assignment_type] ?? { label: task.assignment_type, Icon: Type }
+                    // Rescue Ready fork: an essay is a CUSTOM task; label it as an essay.
+                    const meta = isEssayTask(task)
+                        ? { label: 'Essay', Icon: NotebookPen }
+                        : TASK_TYPE_META[task.assignment_type] ?? { label: task.assignment_type, Icon: Type }
                     const Icon = meta.Icon
                     const isSelected = task.assignment_task_uuid === assignmentTask.selectedAssignmentTaskUUID
                     const descriptionPreview = stripMarkup(task.description || '')
