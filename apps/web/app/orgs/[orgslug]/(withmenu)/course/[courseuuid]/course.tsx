@@ -31,6 +31,8 @@ import CourseAccessError from '@components/Objects/Courses/CourseAccessError/Cou
 import { JsonLd } from '@components/SEO/JsonLd'
 import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
 import { sequentialLockHint } from '@components/Pages/Courses/sequentialLock'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 const CourseClient = (props: any) => {
   const { t } = useTranslation()
@@ -337,10 +339,13 @@ const CourseClient = (props: any) => {
             </div>
             <div className="pb-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
               <h1 className="text-3xl md:text-3xl font-bold" dir="auto">{course.name}</h1>
+              {/* Rescue Ready fork: a closed school's courses aren't for sharing; hidden in white-label. */}
+              {!RR_WHITE_LABEL && (
               <CourseShare
                 courseName={course.name}
                 courseUrl={getUriWithOrg(orgslug, `/course/${courseuuid}`)}
               />
+              )}
             </div>
 
             <div className="flex flex-col md:flex-row gap-8 pt-2">
@@ -490,11 +495,14 @@ const CourseClient = (props: any) => {
                 <CoursesActions courseuuid={courseuuid} orgslug={orgslug} course={course} trailData={trailData} />
                 
                 {/* Authors & Updates Box */}
+                {/* Rescue Ready fork: hidden in white-label (authors and the updates feed aren't used). */}
+                {!RR_WHITE_LABEL && (
                 <div className="bg-white shadow-md shadow-gray-300/25 outline outline-1 outline-neutral-200/40 rounded-lg overflow-hidden p-4">
                   <CourseProvider courseuuid={course.course_uuid}>
                     <CourseAuthors authors={course.authors} />
                   </CourseProvider>
                 </div>
+                )}
               </div>
             </div>
 

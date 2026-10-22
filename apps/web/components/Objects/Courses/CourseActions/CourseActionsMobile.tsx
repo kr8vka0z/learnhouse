@@ -16,6 +16,8 @@ import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency } from '@/lib/format'
 import { billingIntervalSuffix } from '@/lib/payments/billingInterval'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface Author {
   user: {
@@ -259,10 +261,15 @@ const CourseActionsMobile = ({ courseuuid, orgslug, course, trailData }: CourseA
       return rolePriority[a.authorship] - rolePriority[b.authorship];
     });
 
+  // Rescue Ready fork: in white-label a started student has nothing left in
+  // this box (no authors, no leave button), so don't render an empty card.
+  if (RR_WHITE_LABEL && isStarted && linkedOffers.length === 0) return null
+
   return (
     <div className="bg-white/90 backdrop-blur-sm shadow-md shadow-gray-300/25 outline outline-1 outline-neutral-200/40 rounded-lg overflow-hidden p-4 my-6 mx-2">
       <div className="flex flex-col space-y-4">
-        <MultipleAuthors authors={sortedAuthors} />
+        {/* Rescue Ready fork: authors hidden in white-label, as on desktop. */}
+        {!RR_WHITE_LABEL && <MultipleAuthors authors={sortedAuthors} />}
         
         {linkedOffers.length > 0 ? (() => {
           const offer = linkedOffers[0];
@@ -281,6 +288,8 @@ const CourseActionsMobile = ({ courseuuid, orgslug, course, trailData }: CourseA
                       <span className="text-green-800 text-sm font-semibold">{t('courses.you_own_this_course')}</span>
                     </div>
                   </div>
+                  {/* Rescue Ready fork: no self-service "Leave course" in white-label. */}
+                  {!RR_WHITE_LABEL && (
                   <button
                     onClick={handleCourseAction}
                     disabled={isActionLoading}
@@ -295,6 +304,7 @@ const CourseActionsMobile = ({ courseuuid, orgslug, course, trailData }: CourseA
                       </>
                     )}
                   </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -327,7 +337,7 @@ const CourseActionsMobile = ({ courseuuid, orgslug, course, trailData }: CourseA
               )}
             </div>
           );
-        })() : (
+        })() : RR_WHITE_LABEL && isStarted ? null /* Rescue Ready fork: no self-service "Leave course" in white-label; leaving wipes progress. */ : (
           <button
             onClick={handleCourseAction}
             disabled={isActionLoading}

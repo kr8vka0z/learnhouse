@@ -22,6 +22,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@components/ui/dropdown-menu"
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface TrailCourseCardProps {
   course: any
@@ -113,6 +115,9 @@ function TrailCourseCard(props: TrailCourseCardProps) {
   return (
     <div className="group relative flex flex-col bg-white rounded-xl nice-shadow overflow-hidden w-full transition-all duration-300 hover:scale-[1.01]" onMouseEnter={handleMouseEnter}>
       {/* Dropdown Menu */}
+      {/* Rescue Ready fork: its only item is "Quit course", which wipes the
+          student's progress; hidden in white-label. */}
+      {!RR_WHITE_LABEL && (
       <div className="absolute top-2 end-2 z-20">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -138,6 +143,7 @@ function TrailCourseCard(props: TrailCourseCardProps) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      )}
 
       {/* Thumbnail */}
       <Link
