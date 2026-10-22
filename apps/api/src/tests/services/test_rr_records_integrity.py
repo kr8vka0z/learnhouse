@@ -40,6 +40,7 @@ class TestAuditWriter:
             return _CM(db)
 
         monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
+        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
         await record_audit_event(
             event_type=UserAuditEventType.LOGIN, user_id=regular_user.id, org_id=org.id,
             metadata={"method": "password"},
@@ -47,17 +48,27 @@ class TestAuditWriter:
         rows = (await db.execute(select(UserAuditEvent))).scalars().all()
         assert len(rows) == 1 and rows[0].event_type == UserAuditEventType.LOGIN
 
-    async def test_permanent_failure_never_raises(self, regular_user, monkeypatch, caplog):
+    async def test_permanent_failure_logs_ids_but_no_student_content(
+        self, regular_user, monkeypatch, caplog
+    ):
         def factory():
             raise ConnectionError("db down")
 
         monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
-        await record_audit_event(
-            event_type=UserAuditEventType.LOGIN, user_id=regular_user.id,
-            metadata={"method": "magic_link"},
+        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
+        essay = "my private essay " * 10_000
+        await record_audit_event(  # never raises
+            event_type=UserAuditEventType.ASSIGNMENT_SUBMITTED, user_id=regular_user.id,
+            ip="203.0.113.7", user_agent="secret-agent/1.0", target_uuid="assignment_x",
+            metadata={"attempt_number": 2, "answers": [{"answer": {"answer": essay}}]},
         )
-        lost = [r for r in caplog.records if r.levelname == "ERROR"]
-        assert lost and "magic_link" in lost[0].getMessage()
+        lost = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert len(lost) == 1
+        line = lost[0]
+        assert "assignment_x" in line and '"attempt_number": 2' in line and "answers" in line
+        assert "private essay" not in line
+        assert "203.0.113.7" not in line and "secret-agent" not in line
+        assert len(line.encode()) < 48 * 1024
 
 
 class TestRecordShowsWholeAnswer:
@@ -178,6 +189,41 @@ class TestLoginAudit:
         rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
         assert [row.audit_metadata["method"] for row in rows] == ["email_verification"]
 
+    async def test_email_verification_with_mfa_still_writes_login(
+        self, auth_client, audit_to_test_db, db, org, regular_user
+    ):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from src.db.user_mfa import UserMFA
+        from src.db.users import User
+
+        user_id, now = regular_user.id, str(datetime.now())
+        db.add(UserMFA(user_id=user_id, secret_encrypted="x", confirmed_at=now,
+                       creation_date=now, update_date=now))
+        await db.commit()
+        user = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+        with patch("src.routers.auth.check_email_verification_rate_limit", return_value=(True, None)), \
+             patch("src.routers.auth.verify_email_token", new_callable=AsyncMock,
+                   return_value=(user, "Email verified")):
+            async with auth_client as c:
+                r = await c.post("/api/v1/auth/verify-email", json={
+                    "token": "t", "user_uuid": regular_user.user_uuid, "org_uuid": org.org_uuid,
+                })
+        assert r.status_code == 200 and r.json().get("mfa_required") is True
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert [row.audit_metadata["method"] for row in rows] == ["email_verification"]
+
+    async def test_admin_api_session_token_writes_login(
+        self, audit_to_test_db, db, org, regular_user, token_user
+    ):
+        from src.services.admin.admin import issue_user_token
+
+        user_id, org_id = regular_user.id, org.id
+        await issue_user_token(token_user, user_id, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
+        assert [(r.audit_metadata["method"], r.org_id) for r in rows] == [("admin_token", org_id)]
+
 
 # ---------------------------------------------------------------------------
 # Admin-API enrollment writes COURSE_ENROLLED
@@ -294,6 +340,31 @@ class TestUserDeleteKeepsRecords:
         with pytest.raises(HTTPException) as exc:
             await delete_user_by_id(mock_request, db, admin_user, admin_user.id)
         assert exc.value.status_code == 409
+
+    async def test_sign_in_history_alone_does_not_block_deletion(
+        self, delete_rbac, audit_to_test_db, act_as_superadmin, auth_client, db, mock_request,
+        org, admin_user, regular_user,
+    ):
+        # Owner decision: only learning records are kept; an account that only
+        # ever signed in can still be deleted, as can a sole admin whose org
+        # holds nothing but sign-ins.
+        from src.db.users import User
+        from src.services.auth.magic_login import issue_magic_login_token
+        from src.services.users.users import delete_user_by_id
+
+        org_id, admin_id, student_id = org.id, admin_user.id, regular_user.id
+        async with auth_client as c:
+            for email in (regular_user.email, admin_user.email):
+                token = issue_magic_login_token(email, org_id)
+                assert (await c.post("/api/v1/auth/magic-link/verify", json={"token": token})).status_code == 200
+        # Org-scoped sign-ins, so the sole-admin org check sees them too.
+        for uid in (student_id, admin_id):
+            assert [r.org_id for r in await _audit_rows(db, uid, UserAuditEventType.LOGIN)] == [org_id]
+
+        await delete_user_by_id(mock_request, db, admin_user, student_id)
+        await delete_user_by_id(mock_request, db, admin_user, admin_id)
+        remaining = (await db.execute(select(User.id).where(User.id.in_([student_id, admin_id])))).all()
+        assert remaining == []
 
 
 # ---------------------------------------------------------------------------
