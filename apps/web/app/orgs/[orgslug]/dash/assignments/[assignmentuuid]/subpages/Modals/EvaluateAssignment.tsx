@@ -1,5 +1,5 @@
 import { useAssignments } from '@components/Contexts/Assignments/AssignmentContext';
-import { BookOpenCheck, Check, CircleHelp, ClipboardCheck, Download, Info, MessageSquare, UserCheck, X } from 'lucide-react';
+import { BookOpenCheck, Check, CircleHelp, ClipboardCheck, Download, Info, MessageSquare, RotateCcw, UserCheck, X } from 'lucide-react';
 import Link from 'next/link';
 import React, { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,7 +14,7 @@ import TaskShortAnswerObject from '../../_components/TaskEditor/Subs/TaskTypes/T
 import TaskNumberAnswerObject from '../../_components/TaskEditor/Subs/TaskTypes/TaskNumberAnswerObject';
 import { useOrg } from '@components/Contexts/OrgContext';
 import { getTaskRefFileDir } from '@services/media/media';
-import { deleteUserSubmission, getFinalGrade, markActivityAsDoneForUser, putFinalGrade } from '@services/courses/assignments';
+import { deleteUserSubmission, getFinalGrade, grantAssignmentAttempt, markActivityAsDoneForUser, putFinalGrade } from '@services/courses/assignments';
 import { useLHSession } from '@components/Contexts/LHSessionContext';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
@@ -181,6 +181,15 @@ function EvaluateAssignment({ user_id }: any) {
             return
         }
         setGradePreview(gradeRes.data);
+        // Rescue Ready fork: a passing grade already completes the activity on
+        // the server, and a failing one must not. Calling the "mark as done"
+        // override here would complete a failed attempt, so stop at the grade.
+        if (!gradeRes.data?.passed) {
+            toast(t('dashboard.assignments.submissions.toasts.graded_not_passed', { defaultValue: 'Graded. The attempt did not pass, so the activity stays incomplete.' }))
+            const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
+            queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
+            return
+        }
         const doneRes = await markActivityAsDoneForUser(user_id, assignmentUuid, access_token)
         if (doneRes.success) {
             toast.success(t('dashboard.assignments.submissions.toasts.finalize_success'))
@@ -209,6 +218,22 @@ function EvaluateAssignment({ user_id }: any) {
         toast.success(t('dashboard.assignments.submissions.toasts.reject_success'))
         // Revalidate the submissions list + this user's submission caches
         // so the modal can close cleanly and the list reflects the rollback.
+        const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.submission(rawUuid) })
+        setGradePreview(null)
+    }
+
+    // Rescue Ready fork: reopen a failed, graded submission for one more
+    // attempt. The server refuses (with a reason) if the student can still
+    // retry on their own, already passed, or the deadline is over.
+    async function grantAttempt() {
+        const res = await grantAssignmentAttempt(user_id, assignmentUuid, access_token)
+        if (!res.success) {
+            toast.error(res.data?.detail || t('common.something_went_wrong'))
+            return
+        }
+        toast.success(t('dashboard.assignments.submissions.toasts.attempt_granted', { defaultValue: 'Another attempt granted.' }))
         const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
         queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
         queryClient.invalidateQueries({ queryKey: queryKeys.assignments.submission(rawUuid) })
@@ -403,6 +428,24 @@ function EvaluateAssignment({ user_id }: any) {
                             <CircleHelp size={14} />
                         </div>
                     </ToolTip>
+                    {/* Rescue Ready fork: only offered on a failing grade. */}
+                    {liveGrade && !liveGrade.passed && !isUngraded && (
+                        <ConfirmationModal
+                            confirmationButtonText={t('dashboard.assignments.submissions.actions.grant_attempt', { defaultValue: 'Allow another attempt' })}
+                            confirmationMessage={t('dashboard.assignments.submissions.actions.grant_attempt_description', { defaultValue: "Clears this student's answers so they can try once more. Their earlier answers stay in the records." })}
+                            dialogTitle={t('dashboard.assignments.submissions.actions.grant_attempt', { defaultValue: 'Allow another attempt' })}
+                            functionToExecute={grantAttempt}
+                            status='info'
+                            dialogTrigger={
+                                <button
+                                    className='flex items-center space-x-1.5 px-3.5 py-2 text-xs font-bold text-gray-700 bg-gray-100 rounded-lg nice-shadow hover:bg-gray-200/80 transition-colors cursor-pointer'
+                                >
+                                    <RotateCcw size={14} />
+                                    <span>{t('dashboard.assignments.submissions.actions.grant_attempt', { defaultValue: 'Allow another attempt' })}</span>
+                                </button>
+                            }
+                        />
+                    )}
                 </div>
 
                 <div className='flex items-center space-x-3'>
