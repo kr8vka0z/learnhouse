@@ -21,6 +21,8 @@ The fork runs in OSS mode (no `ee/` folders). We do not fake EE mode or edit `EE
 
 Every edit to an upstream file carries a `Rescue Ready fork:` marker comment, so `grep -rn "Rescue Ready fork" apps` lists everything we changed.
 
+To try these features locally on a fresh database with a seeded sample course and students, see [deploy/local-preview/README.md](deploy/local-preview/README.md).
+
 ## How we track upstream
 
 - `origin` is this fork; `upstream` is learnhouse/learnhouse. Pull requests go to this fork only, never to upstream.
