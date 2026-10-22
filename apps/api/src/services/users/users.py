@@ -1137,6 +1137,12 @@ async def delete_user_by_id(
             detail="Only the account owner can delete this account",
         )
 
+    # Rescue Ready fork: every record table cascades on user/org delete, so a
+    # hard delete would erase the student's official completion record.
+    from src.services.audit.record_retention import ensure_user_deletion_keeps_records
+
+    await ensure_user_deletion_keeps_records(db_session, user_id)
+
     # Capture identity before deletion for the confirmation ('goodbye') email.
     deleted_email = user.email
     deleted_username = user.username

@@ -216,3 +216,64 @@ class TestAdminEnrollmentAudit:
         await bulk_enroll_users(token_user, course_uuid, [user_id], mock_request, db)
         rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_ENROLLED)
         assert [r.target_uuid for r in rows] == [course_uuid]
+
+
+# ---------------------------------------------------------------------------
+# Deleting an account must not erase the record
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def delete_rbac():
+    from unittest.mock import AsyncMock, patch
+
+    with patch("src.services.users.users.authorization_verify_if_user_is_anon", new_callable=AsyncMock), \
+         patch("src.services.users.users.authorization_verify_based_on_roles_and_authorship",
+               new_callable=AsyncMock), \
+         patch("src.services.trail.trail.track", new_callable=AsyncMock), \
+         patch("src.services.trail.trail.dispatch_webhooks", new_callable=AsyncMock):
+        yield
+
+
+@pytest.fixture
+def act_as_superadmin():
+    from unittest.mock import AsyncMock, patch
+
+    with patch("src.services.users.users.is_user_superadmin", new_callable=AsyncMock, return_value=True):
+        yield
+
+
+class TestUserDeleteKeepsRecords:
+    async def test_student_with_completion_cannot_be_hard_deleted(
+        self, delete_rbac, audit_to_test_db, act_as_superadmin, db, mock_request,
+        admin_user, regular_user, activity,
+    ):
+        from fastapi import HTTPException
+
+        from src.db.users import User
+        from src.services.trail.trail import add_activity_to_trail
+        from src.services.users.users import delete_user_by_id
+
+        user_id = regular_user.id
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_user_by_id(mock_request, db, admin_user, user_id)
+        assert exc.value.status_code == 409
+        assert (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+        assert await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_COMPLETED)
+
+    async def test_sole_admin_cannot_delete_account_that_drops_org_records(
+        self, delete_rbac, audit_to_test_db, db, mock_request, admin_user, regular_user, activity,
+    ):
+        from fastapi import HTTPException
+
+        from src.services.trail.trail import add_activity_to_trail
+        from src.services.users.users import delete_user_by_id
+
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+        # The admin has no records of their own, but is the org's only admin, so
+        # deleting the account would cascade the org and the student's record.
+        with pytest.raises(HTTPException) as exc:
+            await delete_user_by_id(mock_request, db, admin_user, admin_user.id)
+        assert exc.value.status_code == 409
