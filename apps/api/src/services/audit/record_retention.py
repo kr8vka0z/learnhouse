@@ -9,6 +9,11 @@ against upstream's schema), the one hard-delete path refuses while records
 exist. Removing someone from the organization (membership only, nothing
 cascades) and anonymizing them (admin API; keeps the rows, scrubs the PII) stay
 available.
+
+Only LEARNING records count (owner decision): enrollments, progress,
+submissions, certificates, and audit rows other than sign-in/sign-out. An
+account that only ever signed in (staff, or a student who never started) can
+still be deleted, taking its connection log with it.
 """
 from fastapi import HTTPException
 from sqlmodel import func, select
@@ -18,31 +23,33 @@ from src.db.courses.assignments import AssignmentUserSubmission
 from src.db.courses.certifications import CertificateUser
 from src.db.trail_runs import TrailRun
 from src.db.trail_steps import TrailStep
-from src.db.user_audit_events import UserAuditEvent
+from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
 from src.db.user_organizations import UserOrganization
 from src.security.rbac.constants import ADMIN_ROLE_ID
 
 _USER_RECORD_TABLES = (TrailRun, TrailStep, AssignmentUserSubmission, CertificateUser, UserAuditEvent)
 # Every row an org's student records live in carries org_id on these two.
 _ORG_RECORD_TABLES = (TrailRun, UserAuditEvent)
+_CONNECTION_EVENTS = (UserAuditEventType.LOGIN, UserAuditEventType.LOGOUT)
+
+
+async def _any(db_session: AsyncSession, table, condition) -> bool:
+    stmt = select(table.id).where(condition)
+    if table is UserAuditEvent:
+        stmt = stmt.where(UserAuditEvent.event_type.not_in(_CONNECTION_EVENTS))  # type: ignore[attr-defined]
+    return (await db_session.execute(stmt.limit(1))).first() is not None
 
 
 async def user_has_records(db_session: AsyncSession, user_id: int) -> bool:
     for table in _USER_RECORD_TABLES:
-        found = (await db_session.execute(
-            select(table.id).where(table.user_id == user_id).limit(1)
-        )).first()
-        if found:
+        if await _any(db_session, table, table.user_id == user_id):
             return True
     return False
 
 
 async def org_has_records(db_session: AsyncSession, org_id: int) -> bool:
     for table in _ORG_RECORD_TABLES:
-        found = (await db_session.execute(
-            select(table.id).where(table.org_id == org_id).limit(1)
-        )).first()
-        if found:
+        if await _any(db_session, table, table.org_id == org_id):
             return True
     return False
 
