@@ -30,6 +30,7 @@ import CourseShare from '@components/Objects/Courses/CourseShare/CourseShare'
 import CourseAccessError from '@components/Objects/Courses/CourseAccessError/CourseAccessError'
 import { JsonLd } from '@components/SEO/JsonLd'
 import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
+import { sequentialLockHint } from '@components/Pages/Courses/sequentialLock'
 
 const CourseClient = (props: any) => {
   const { t } = useTranslation()
@@ -585,6 +586,10 @@ const CourseClient = (props: any) => {
                             <Layers size={16} className="me-1" />
                             <span>{chapter.activities.length} {t('activities.activities')}</span>
                           </div>
+                          {/* Rescue Ready fork: say which chapter opens this one. */}
+                          {sequentialLockHint(chapter, t) && (
+                            <p className="mt-1 text-xs font-medium text-rose-600">{sequentialLockHint(chapter, t)}</p>
+                          )}
                         </div>
                       </div>
                       <div className={`transition-all duration-200 ${isExpanded ? 'block' : 'hidden'}`}>
@@ -640,7 +645,8 @@ const CourseClient = (props: any) => {
                                 <div
                                   key={activity.activity_uuid}
                                   className="block activity-container px-4 py-4 cursor-not-allowed select-none"
-                                  title={t('course.activity_locked_hint', 'Sign in or join the right user group to unlock this.')}
+                                  // Rescue Ready fork: sequential locks name the chapter to finish.
+                                  title={sequentialLockHint(activity, t) ?? t('course.activity_locked_hint', 'Sign in or join the right user group to unlock this.')}
                                 >
                                   {RowInner}
                                 </div>

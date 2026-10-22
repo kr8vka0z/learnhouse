@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { useTranslation } from 'react-i18next'
 import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
+import SequentialChaptersSetting from './SequentialChaptersSetting'
 
 type EditCourseAccessProps = {
     orgslug: string
@@ -225,6 +226,9 @@ function EditCourseAccess(_props: EditCourseAccessProps) {
                         )}
                     </div>
                 </div>
+
+                {/* Rescue Ready fork: pass-to-unlock chapter gating */}
+                <SequentialChaptersSetting />
 
                 {/* User groups (Users-table styled) */}
                 {isClientPublic === false && <UserGroupsSection usergroups={usergroups} />}

@@ -23,6 +23,12 @@ import { queryKeys } from '@/lib/query/keys'
 import { useTrail } from '@/hooks/queries/useTrail'
 import { useCourseMeta } from '@/hooks/queries/useCourses'
 import { activityQueryOptions, useActivity } from '@/hooks/queries/useActivity'
+import {
+  courseHasSequentialLocks,
+  refreshAfterSequentialProgress,
+  sequentialLockHint,
+  sequentialUnlockPath,
+} from '@components/Pages/Courses/sequentialLock'
 import CourseAccessError from '@components/Objects/Courses/CourseAccessError/CourseAccessError'
 import ConfirmationModal from '@components/Objects/StyledElements/ConfirmationModal/ConfirmationModal'
 import Modal from '@components/Objects/StyledElements/Modal/Modal'
@@ -515,6 +521,10 @@ function ActivityClient(props: ActivityClientProps) {
 
   if (activity?.is_locked) {
     const isAuthenticated = session?.status === 'authenticated'
+    // Rescue Ready fork: a sequential lock names the chapter to finish and
+    // links to where the student should pick up.
+    const sequentialHint = sequentialLockHint(activity, t)
+    const sequentialPath = sequentialUnlockPath(activity, courseuuid)
     return (
       <GeneralWrapperStyled>
         <div className="max-w-2xl mx-auto my-16 bg-white rounded-2xl border border-gray-200/80 shadow-sm p-8 text-center">
@@ -525,11 +535,22 @@ function ActivityClient(props: ActivityClientProps) {
             {t('course.locked_title', 'This activity is locked')}
           </h1>
           <p className="text-sm text-gray-500 mb-6 leading-relaxed">
-            {isAuthenticated
+            {sequentialHint ?? (isAuthenticated
               ? t('course.locked_restricted', 'You need to be a member of the right user group to access this. Ask a course admin to add you.')
-              : t('course.locked_auth_required', 'You need to sign in to access this activity.')}
+              : t('course.locked_auth_required', 'You need to sign in to access this activity.'))}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 justify-center">
+            {isAuthenticated && sequentialPath && (
+              <Link
+                href={getUriWithOrg(orgslug, '') + sequentialPath}
+                className="inline-flex items-center justify-center px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition-colors"
+              >
+                {t('course.sequential_go_to_chapter', {
+                  defaultValue: 'Go to {{chapter}}',
+                  chapter: activity.lock_requires_chapter?.chapter_name ?? '',
+                })}
+              </Link>
+            )}
             {!isAuthenticated && (
               <Link
                 href={getUriWithOrg(orgslug, '/login')}
@@ -1252,10 +1273,16 @@ export function MarkStatus(props: {
         if (trail?.runs) queryClient.setQueryData(trailKey, trail);
       });
 
+      // Rescue Ready fork: when a chapter is still sequential-locked this
+      // completion may open it, so wait for the server and drop the stale
+      // locked reads before moving on.
+      const mayUnlockChapter = courseHasSequentialLocks(props.course);
+
       // The end page shows the certificate, which the request creates, so only
       // that navigation waits for it. Moving on to the next activity does not.
-      if (willCompleteAll || !nextActivity) {
+      if (willCompleteAll || !nextActivity || mayUnlockChapter) {
         await request;
+        await refreshAfterSequentialProgress(queryClient, props.course);
       } else {
         request.catch(() => {
           queryClient.setQueryData(trailKey, previousTrail);
@@ -1625,6 +1652,9 @@ function AssignmentTools(props: {
           // fetched with it stripped, so refetch that too; otherwise the
           // learner has to reload the page to see what they just earned.
           queryClient.invalidateQueries({ queryKey: queryKeys.assignments.detail(props.assignment?.assignment_uuid) })
+          // Rescue Ready fork: a submitted or passed assignment can open the
+          // next sequential chapter.
+          refreshAfterSequentialProgress(queryClient, props.course)
         }
         else {
           toast.error(t('assignments.failed_submit_assignment'))
