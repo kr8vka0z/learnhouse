@@ -77,6 +77,16 @@ async def apply_activity_lock(
             .where(ChapterActivity.activity_id == activity.id)
         )).scalars().first()
 
+    # Rescue Ready fork: pass-to-unlock chapter gating. Resolved before the
+    # course-level usergroup return below so a group grant cannot skip it.
+    from src.services.courses.sequential import (
+        mark_activity_sequential_locked,
+        sequential_lock_for_chapter,
+    )
+    seq_lock = await sequential_lock_for_chapter(
+        course, parent_chapter_row.id if parent_chapter_row else None, current_user, db_session
+    )
+
     check_uuids: list[str] = [course.course_uuid]
     if (activity.lock_type or "public") == "restricted":
         check_uuids.append(activity.activity_uuid)
@@ -91,6 +101,7 @@ async def apply_activity_lock(
 
     # Course-level usergroup membership unlocks everything below it.
     if course.course_uuid in accessible:
+        mark_activity_sequential_locked(activity_read, seq_lock)  # Rescue Ready fork
         return
 
     chapter_locked = False
@@ -119,6 +130,9 @@ async def apply_activity_lock(
         activity_read.content = {}
         activity_read.details = None
         activity_read.is_locked = True
+    else:
+        # Rescue Ready fork: a tier lock keeps its own (None) reason.
+        mark_activity_sequential_locked(activity_read, seq_lock)
 
 
 async def _reader_state(
@@ -149,6 +163,8 @@ async def _reader_state(
     if await can_edit_course(request, course.course_uuid, current_user, db_session):
         activity_read.content, activity_read.details = content, details
         activity_read.is_locked = False
+        # Rescue Ready fork: editors bypass the sequential gate too.
+        activity_read.lock_reason = activity_read.lock_requires_chapter = None
         return "ok"
     if not paid:
         return "unpaid"

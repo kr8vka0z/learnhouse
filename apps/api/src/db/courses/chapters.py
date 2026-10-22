@@ -60,6 +60,9 @@ class ChapterRead(ChapterBase):
     # content (and, by cascade, its activities). Metadata (name, thumbnail) is still
     # returned so TOC navigation still renders a lock placeholder.
     is_locked: bool = False
+    # Rescue Ready fork: lock reason, see ActivityRead.lock_reason.
+    lock_reason: Optional[str] = None
+    lock_requires_chapter: Optional[dict] = None
     pass
 
 

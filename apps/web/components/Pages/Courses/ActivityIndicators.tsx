@@ -1,5 +1,5 @@
 'use client'
-import { BookOpenCheck, Check, FileText, Layers, Video, ChevronLeft, ChevronRight, ChevronDown, Trophy, Package, Puzzle, Globe } from 'lucide-react'
+import { BookOpenCheck, Check, FileText, Layers, Video, ChevronLeft, ChevronRight, ChevronDown, Trophy, Package, Puzzle, Globe, Lock } from 'lucide-react'
 import { MarkdownLogo } from '@phosphor-icons/react'
 import React, { useMemo, memo, useState, useRef, useEffect, useCallback } from 'react'
 import ToolTip from '@components/Objects/StyledElements/Tooltip/Tooltip'
@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslation } from 'react-i18next'
 import { useCourseCertification } from '@components/Hooks/useCourseCertification'
+import { sequentialLockHint } from '@components/Pages/Courses/sequentialLock'
 
 interface Props {
   course: any
@@ -113,6 +114,13 @@ const ActivityTooltipContent = memo(({
         {isCurrent ? t('activities.current_activity') : isDone ? t('common.completed') : t('activities.not_started')}
       </span>
     </div>
+    {/* Rescue Ready fork: same lock wording as the course page. */}
+    {activity.is_locked && (
+      <div className="flex items-center gap-1 mt-2 text-xs text-rose-600">
+        <Lock size={12} />
+        <span>{sequentialLockHint(activity, t) ?? t('course.locked', 'Locked')}</span>
+      </div>
+    )}
   </div>
   );
 });
@@ -370,6 +378,10 @@ function ActivityIndicators(props: Props) {
     }
     if (isCurrent) {
       return `${current_activity_style}`
+    }
+    // Rescue Ready fork: locked segments read as unavailable, not "to do".
+    if (activity.is_locked) {
+      return 'bg-zinc-100 opacity-60'
     }
     return `${black_activity_style}`
   }, [isActivityDone, isActivityCurrent]);

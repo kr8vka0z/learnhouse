@@ -524,6 +524,11 @@ async def _apply_locks_to_chapters(
                 activity.content = {}
                 activity.details = None
 
+    # Rescue Ready fork: pass-to-unlock chapter gating composes with the lock
+    # tiers above (locked if either says locked). Admins returned earlier.
+    from src.services.courses.sequential import apply_sequential_locks_to_chapters
+    await apply_sequential_locks_to_chapters(chapters, course, current_user, db_session, request)
+
 
 # Important Note : this is legacy code that has been used because
 # the frontend is still not adapted for the new data structure, this implementation is absolutely not the best one
