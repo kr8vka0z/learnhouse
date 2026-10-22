@@ -1,6 +1,7 @@
-"""Rescue Ready fork: admin-API actions that remove part of a student's record
-(unenroll, bulk unenroll, uncomplete, progress reset) leave an audit row saying
-what was removed, so the record never loses completions without a trace.
+"""Rescue Ready fork: actions that remove part of a student's record leave an
+audit row saying what was removed, so the record never loses completions without
+a trace. Covers the admin API (unenroll, bulk unenroll, uncomplete, progress
+reset) and the student's own uncomplete / leave-course paths.
 """
 
 from src.db.user_audit_events import UserAuditEventType
@@ -9,6 +10,7 @@ from src.tests.services.test_rr_records_integrity import (  # noqa: F401 (fixtur
     _audit_rows,
     _complete_steps,
     audit_to_test_db,
+    delete_rbac,
     quiet_admin,
     token_user,
 )
@@ -144,3 +146,53 @@ class TestAdminUndoAudit:
 
         rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_UNCOMPLETED)
         assert [r.target_uuid for r in rows] == [uuids[0]]
+
+
+async def _student_completes_two(db, mock_request, org, course, chapter, student):
+    """The student completes two documents through the self-service path
+    (which also enrolls them)."""
+    from src.services.trail.trail import add_activity_to_trail
+
+    docs = [await _add_activity(db, org, course, chapter, n, assignment=False) for n in (70, 71)]
+    uuids = [d.activity_uuid for d in docs]
+    for u in uuids:
+        await add_activity_to_trail(mock_request, student, u, db)
+    assert await _complete_steps(db, student.id) == {70, 71}
+    return uuids
+
+
+class TestStudentUndoAudit:
+    async def test_student_uncomplete_records_only_real_removals(
+        self, audit_to_test_db, delete_rbac, db, mock_request, org, course, chapter, regular_user,
+    ):
+        from src.services.trail.trail import remove_activity_from_trail
+
+        user_id = regular_user.id
+        uuids = await _student_completes_two(db, mock_request, org, course, chapter, regular_user)
+
+        await remove_activity_from_trail(mock_request, regular_user, uuids[0], db)
+        await remove_activity_from_trail(mock_request, regular_user, uuids[0], db)  # no-op
+
+        assert await _complete_steps(db, user_id) == {71}
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_UNCOMPLETED)
+        assert [(r.target_uuid, r.audit_metadata["removed_by"], r.audit_metadata["was_complete"])
+                for r in rows] == [(uuids[0], "student", True)]
+
+    async def test_student_leaving_course_records_what_was_removed(
+        self, audit_to_test_db, delete_rbac, db, mock_request, org, course, chapter, regular_user,
+    ):
+        from src.services.trail.trail import remove_course_from_trail
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        await _student_completes_two(db, mock_request, org, course, chapter, regular_user)
+
+        await remove_course_from_trail(mock_request, regular_user, course_uuid, db)
+        await remove_course_from_trail(mock_request, regular_user, course_uuid, db)  # no-op
+
+        assert await _complete_steps(db, user_id) == set()
+        rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_UNENROLLED)
+        assert len(rows) == 1
+        meta = rows[0].audit_metadata
+        assert rows[0].target_uuid == course_uuid and meta["removed_by"] == "student"
+        assert (meta["steps_deleted"], meta["completed_steps_deleted"]) == (2, 2)
+        assert meta["previous_status"] is not None

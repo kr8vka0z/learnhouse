@@ -18,7 +18,7 @@ from src.services.courses.certifications import (
 )
 from src.services.analytics.analytics import track
 from src.services.analytics import events as analytics_events
-from src.services.audit.audit import record_audit_event
+from src.services.audit.audit import record_audit_event, record_removal_event  # Rescue Ready fork: removal rows
 from src.db.user_audit_events import UserAuditEventType
 from src.services.webhooks.dispatch import dispatch_webhooks
 from src.security.rbac import check_resource_access, AccessAction
@@ -463,8 +463,22 @@ async def remove_activity_from_trail(
     trail_step = (await db_session.execute(statement)).scalars().first()
 
     if trail_step:
+        was_complete = bool(trail_step.complete)  # Rescue Ready fork: for the audit row
         await db_session.delete(trail_step)
         await db_session.commit()
+        # Rescue Ready fork: the deleted step leaves no other trace in the
+        # student's record. Written before the status sync so a sync failure
+        # can't leave a committed removal unrecorded.
+        await record_removal_event(
+            event_type=UserAuditEventType.ACTIVITY_UNCOMPLETED,
+            user_id=user.id,
+            course=course,
+            target_uuid=activity_uuid,
+            removed_by="student",
+            activity_name=activity.name,
+            activity_type=getattr(activity.activity_type, "value", activity.activity_type),
+            was_complete=was_complete,
+        )
         # Completion may have been lost, so demote the enrollment back to
         # in-progress so counts stay accurate.
         if course.id:
@@ -604,6 +618,17 @@ async def remove_course_from_trail(
     )
     trail_run = (await db_session.execute(statement)).scalars().first()
 
+    # Rescue Ready fork: tally what is about to be removed, for the audit row.
+    step_flags = (await db_session.execute(
+        select(TrailStep.complete).where(
+            TrailStep.course_id == course.id,
+            TrailStep.user_id == user.id,
+        )
+    )).scalars().all()
+    previous_status = (
+        getattr(trail_run.status, "value", trail_run.status) if trail_run else None
+    )
+
     if trail_run:
         await db_session.delete(trail_run)
 
@@ -618,6 +643,20 @@ async def remove_course_from_trail(
         )
     )
     await db_session.commit()
+
+    # Rescue Ready fork: record the removal; a call that removed nothing
+    # (no enrollment, no steps) writes no row.
+    if trail_run or step_flags:
+        await record_removal_event(
+            event_type=UserAuditEventType.COURSE_UNENROLLED,
+            user_id=user.id,
+            course=course,
+            target_uuid=course.course_uuid,
+            removed_by="student",
+            steps_deleted=len(step_flags),
+            completed_steps_deleted=sum(1 for c in step_flags if c),
+            previous_status=previous_status,
+        )
 
     statement = select(TrailRun).where(TrailRun.trail_id == trail.id, TrailRun.user_id == user.id)
     trail_runs_raw = (await db_session.execute(statement)).scalars().all()

@@ -54,7 +54,7 @@ from src.services.analytics.analytics import track
 from src.services.analytics import events as analytics_events
 from src.services.webhooks.dispatch import dispatch_webhooks
 # Rescue Ready fork: admin-API enrollment/completion writes the student record.
-from src.services.audit.audit import record_audit_event
+from src.services.audit.audit import record_audit_event, record_removal_event
 from src.db.user_audit_events import UserAuditEventType
 from src.security.auth import create_access_token
 from src.security.org_auth import org_owns_account
@@ -517,19 +517,15 @@ async def _rr_record_undo(
     a student's record (unenroll, uncomplete, progress reset). Those rows are
     deleted outright, so this row is the only trace they ever existed. Written
     after the caller's commit, like the other admin-API audit rows."""
-    await record_audit_event(
+    await record_removal_event(
         event_type=event_type,
         user_id=user_id,
-        org_id=course.org_id,
+        course=course,
         target_uuid=target_uuid,
-        metadata={
-            "course_uuid": course.course_uuid,
-            "course_name": course.name,
-            "removed_by": "admin_api",
-            "api_token_id": getattr(token_user, "id", None),
-            "api_token_created_by_user_id": getattr(token_user, "created_by_user_id", None),
-            **details,
-        },
+        removed_by="admin_api",
+        api_token_id=getattr(token_user, "id", None),
+        api_token_created_by_user_id=getattr(token_user, "created_by_user_id", None),
+        **details,
     )
 
 
