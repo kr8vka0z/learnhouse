@@ -19,6 +19,7 @@ from src.db.courses.assignments import (
     AssignmentTask,
     AssignmentTaskSubmissionUpdate,
     AssignmentTaskTypeEnum,
+    AssignmentTaskUpdate,
     AssignmentUserSubmission,
     AssignmentUserSubmissionStatus,
     GradingTypeEnum,
@@ -32,7 +33,9 @@ from src.services.courses.activities.assignments import (
     grade_assignment_submission,
     grant_assignment_attempt,
     handle_assignment_task_submission,
+    mark_activity_as_done_for_user,
     retry_assignment_submission,
+    update_assignment_task,
 )
 
 _A = "src.services.courses.activities.assignments."
@@ -223,6 +226,38 @@ class TestManualGrading:
             mock_request, regular_user.id, a.assignment_uuid, admin_user, db
         )
         assert (await _step(db, activity, regular_user)).complete is False
+
+
+class TestRegradeAndOverride:
+    async def test_regrade_below_threshold_uncompletes(
+        self, env, mock_request, db, org, course, chapter, activity,
+        regular_user, admin_user,
+    ):
+        a = await _assignment(db, org, course, chapter, activity)
+        await _attempt(mock_request, db, a, regular_user, "4")
+        assert (await _step(db, activity, regular_user)).complete is True
+
+        # The instructor moves the answer key, so the stored answer now fails.
+        await update_assignment_task(
+            mock_request, "assignmenttask_rr_completion",
+            AssignmentTaskUpdate(contents={"correct_answers": ["5"], "match_mode": "exact"}),
+            admin_user, db,
+        )
+        assert (await _step(db, activity, regular_user)).complete is False
+
+    async def test_instructor_mark_done_is_audited_as_override(
+        self, env, mock_request, db, org, course, chapter, activity,
+        regular_user, admin_user,
+    ):
+        a = await _assignment(db, org, course, chapter, activity, auto_grading=False)
+        await _attempt(mock_request, db, a, regular_user, "5")
+        await mark_activity_as_done_for_user(
+            mock_request, regular_user.id, a.assignment_uuid, admin_user, db
+        )
+        assert (await _step(db, activity, regular_user)).complete is True
+        completed = _audits(env, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert len(completed) == 1
+        assert completed[0]["metadata"]["completed_by"] == "instructor"
 
 
 class TestFormative:
