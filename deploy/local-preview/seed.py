@@ -375,13 +375,17 @@ def upload_image(tok, org_id, endpoint, field, path):
 
 def brand_org(tok, org):
     """White-label the org: brand color, no "Powered by" watermark (site and
-    email), mail sender name = org name, and the logo files when given.
+    email), mail sender name = org name, AI features off, and the logo files
+    when given.
     Idempotent, so it also runs on an already-seeded stack."""
     org_id = org["id"]
     q = urllib.parse.quote
     call("PUT", f"/orgs/{org_id}/config/color?color={q(BRAND_COLOR)}", tok)
     call("PUT", f"/orgs/{org_id}/config/watermark?watermark_enabled=false", tok)
     call("PUT", f"/orgs/{org_id}/config/email_sender_name?email_sender_name={q(org['name'])}", tok)
+    # No AI key in a preview: turn the org's AI features off (same switch as
+    # Settings > AI), which also removes the "Ask AI" button for students.
+    call("PUT", f"/orgs/{org_id}/config/ai?ai_enabled=false&copilot_enabled=false", tok)
     for path, endpoint, field in ((LOGO_FILE, "logo", "logo_file"),
                                   (SQUARE_LOGO_FILE, "square_logo", "square_logo_file"),
                                   # The thumbnail is the org's link-preview image.

@@ -10,7 +10,8 @@ All commands run from this folder. Use `sudo docker` if your user isn't in the
 
 - **Up:** `./make-env.sh 3300` (once; writes `.env` with random secrets, the
   argument is the port), then `docker compose up -d --build`. The first boot
-  creates the org "Rescue Ready" and the admin from `.env`. Wait about 30 s.
+  creates the org and the admin from `.env` ("Sample School" unless you set
+  `LEARNHOUSE_INITIAL_ORG_NAME`/`_SLUG` there first). Wait about 30 s.
   A second stack next to a running one needs its own folder (another checkout
   or worktree), port and project name: `./make-env.sh 3320 lh-second`. The
   project name prefixes the containers, volumes and app image.
@@ -24,7 +25,8 @@ All commands run from this folder. Use `sudo docker` if your user isn't in the
   - Stuck Student: chapter 1 quiz failed on every allowed attempt.
   It first brands the org through the org-settings endpoints: menu bar color
   (`PREVIEW_BRAND_COLOR`, default navy), the "Powered by" watermark off (site
-  and email), the email sender name set to the org name, and logo files when
+  and email), the email sender name set to the org name, AI features off (a
+  preview has no AI key; Settings > AI turns them back on), and logo files when
   given: `PREVIEW_LOGO_FILE` (wide, light-on-dark, for the colored menu bar),
   `PREVIEW_SQUARE_LOGO_FILE` (sign-in panel, dashboard) and
   `PREVIEW_FAVICON_FILE`. PNG, JPG or WebP; SVG is refused. Set them in `.env`
