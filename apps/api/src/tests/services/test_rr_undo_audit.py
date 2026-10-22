@@ -121,3 +121,26 @@ class TestAdminUndoAudit:
         dossier = await build_user_dossier(db, user_id, org.id)
         undo = [e for e in dossier["timeline"] if e["event_type"] == UserAuditEventType.COURSE_UNENROLLED]
         assert len(undo) == 1 and undo[0]["event_label"]
+
+    async def test_uncomplete_row_survives_status_sync_failure(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, org, course, chapter,
+        regular_user,
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        import pytest
+
+        from src.services.admin.admin import uncomplete_activity
+
+        user_id = regular_user.id
+        uuids = await _enroll_and_complete(db, mock_request, token_user, org, course, chapter, user_id)
+
+        # The step delete is committed before the sync runs, so its audit row
+        # must already be written when the sync fails.
+        with patch("src.services.admin.admin.sync_trailrun_status",
+                   new_callable=AsyncMock, side_effect=RuntimeError("sync down")):
+            with pytest.raises(RuntimeError):
+                await uncomplete_activity(token_user, user_id, uuids[0], db)
+
+        rows = await _audit_rows(db, user_id, UserAuditEventType.ACTIVITY_UNCOMPLETED)
+        assert [r.target_uuid for r in rows] == [uuids[0]]

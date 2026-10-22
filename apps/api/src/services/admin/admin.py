@@ -534,6 +534,7 @@ async def _rr_record_undo(
 
 
 def _rr_enum_str(value) -> Optional[str]:
+    """Rescue Ready fork: enum or plain value as a string for audit metadata."""
     if value is None:
         return None
     return value.value if hasattr(value, "value") else str(value)
@@ -933,11 +934,9 @@ async def uncomplete_activity(
         was_complete = bool(step.complete)  # Rescue Ready fork: for the audit row
         await db_session.delete(step)
         await db_session.commit()
-        # Completion may have been lost; demote the enrollment so analytics
-        # stop counting it as completed.
-        if course.id:
-            await sync_trailrun_status(user_id, course.id, db_session)
-        # Rescue Ready fork: only when a step was actually removed.
+        # Rescue Ready fork: only when a step was actually removed, and right
+        # after the delete commits, so a failure in the status sync below can't
+        # leave a committed removal with no audit row.
         await _rr_record_undo(
             UserAuditEventType.ACTIVITY_UNCOMPLETED, token_user, user_id, course,
             activity_uuid,
@@ -945,6 +944,10 @@ async def uncomplete_activity(
             activity_type=_rr_enum_str(activity.activity_type),
             was_complete=was_complete,
         )
+        # Completion may have been lost; demote the enrollment so analytics
+        # stop counting it as completed.
+        if course.id:
+            await sync_trailrun_status(user_id, course.id, db_session)
 
     return {
         "activity_uuid": activity_uuid,
@@ -2149,9 +2152,9 @@ async def reset_user_progress(
             TrailRun.org_id == token_user.org_id,
         )
     )).scalars().first()
-    from src.db.trail_runs import StatusEnum
     previous_status = None  # Rescue Ready fork
     if trail_run:
+        from src.db.trail_runs import StatusEnum
         previous_status = _rr_enum_str(trail_run.status)
         trail_run.status = StatusEnum.STATUS_IN_PROGRESS
         trail_run.update_date = str(datetime.now())
@@ -2161,6 +2164,8 @@ async def reset_user_progress(
 
     # Rescue Ready fork: record the reset when it changed anything (steps
     # removed or the enrollment status moved); a no-op reset leaves no row.
+    # StatusEnum is only reached when previous_status is set, i.e. after the
+    # upstream function-local import above has run.
     if deleted or (previous_status and previous_status != StatusEnum.STATUS_IN_PROGRESS.value):
         await _rr_record_undo(
             UserAuditEventType.COURSE_PROGRESS_RESET, token_user, user_id, course,
