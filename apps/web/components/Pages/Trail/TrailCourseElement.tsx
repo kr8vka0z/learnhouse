@@ -30,7 +30,9 @@ function TrailCourseElement(props: TrailCourseElementProps) {
   const course = props.course
   const router = useRouter()
   const course_total_steps = props.run.course_total_steps
-  const course_completed_steps = props.run.steps.length
+  // Rescue Ready fork: a submitted-but-not-passed assignment has an incomplete
+  // step, so count only completed steps.
+  const course_completed_steps = props.run.steps.filter((step: any) => step.complete).length
   const orgID = org?.id
   const course_progress = course_total_steps > 0
     ? Math.round((course_completed_steps / course_total_steps) * 100)
