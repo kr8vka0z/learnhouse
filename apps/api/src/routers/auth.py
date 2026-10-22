@@ -1129,7 +1129,8 @@ async def magic_link_request(
 
 
 async def _verify_admin_magic_link(
-    request: Request, response: Response, token: str, db_session: AsyncSession
+    request: Request, response: Response, token: str, db_session: AsyncSession,
+    org_id: Optional[int] = None,
 ):
     """Redeem an admin-issued sign-in link for the /auth/magic page.
 
@@ -1144,7 +1145,10 @@ async def _verify_admin_magic_link(
         token=token, db_session=db_session
     )
     user_read = UserRead.model_validate(user)
-    await _record_login_quietly(user, request, db_session)
+    # Rescue Ready fork: method + org so the sign-in lands in the student record.
+    await _record_login_quietly(
+        user, request, db_session, method="admin_magic_link", org_id=org_id
+    )
 
     # The page that redeems the link opens redirect_to afterwards when its URL
     # carries no ?next (an integration that built the URL from the raw token).
@@ -1163,16 +1167,39 @@ async def _verify_admin_magic_link(
     }
 
 
-async def _record_login_quietly(user: User, request: Request, db_session: AsyncSession) -> None:
+async def _record_login_quietly(
+    user: User,
+    request: Request,
+    db_session: AsyncSession,
+    *,
+    method: str,
+    org_id: Optional[int] = None,
+) -> None:
     """Last-login bookkeeping for a link sign-in. The link is already spent by
     now, so a failure here must not cost the user their sign-in. Callers read
     anything they need from ``user`` first: the rollback expires it."""
+    # Rescue Ready fork: link sign-ins also write the LOGIN audit row, like the
+    # password and Google paths. Without it a student who only ever signs in by
+    # link showed zero logins in their record. user.id is read before the try
+    # because a failed update rolls back and expires ``user``. The audit write
+    # sits outside the try (own session, never raises) so a last-login hiccup
+    # does not also drop the LOGIN row.
+    user_id = user.id
+    client_ip = get_client_ip(request)
     try:
-        await update_login_info(user, get_client_ip(request), db_session)
+        await update_login_info(user, client_ip, db_session)
     except Exception:
         logging.getLogger(__name__).warning("Could not record last login", exc_info=True)
         with contextlib.suppress(Exception):
             await db_session.rollback()
+    await record_audit_event(
+        event_type=UserAuditEventType.LOGIN,
+        user_id=user_id,
+        org_id=org_id,
+        ip=client_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={"method": method},
+    )
 
 
 @router.post(
@@ -1199,7 +1226,9 @@ async def magic_link_verify(
     # admin/integration one, which an org's API token issues for a member.
     peek = decode_jwt(body.token) or {}
     if peek.get("purpose") == "magic_link":
-        return await _verify_admin_magic_link(request, response, body.token, db_session)
+        return await _verify_admin_magic_link(
+            request, response, body.token, db_session, org_id=peek.get("org_id")
+        )
 
     email, org_id = await consume_magic_login_token(body.token, db_session)
 
@@ -1229,7 +1258,9 @@ async def magic_link_verify(
         org_id=org_id,
         custom_domain=on_custom_domain,
     )
-    await _record_login_quietly(user, request, db_session)
+    await _record_login_quietly(
+        user, request, db_session, method="magic_link", org_id=org_id
+    )
     if issue.mfa_required:
         return {"mfa_required": True, "mfa_token": issue.mfa_token}
 
@@ -1411,6 +1442,17 @@ async def api_verify_email(
             "mfa_required": True,
             "mfa_token": issue.mfa_token,
         }
+
+    # Rescue Ready fork: the verification link signs the user in, so it is a
+    # sign-in for the student record too.
+    await record_audit_event(
+        event_type=UserAuditEventType.LOGIN,
+        user_id=user.id,
+        org_id=session_org_id,
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={"method": "email_verification"},
+    )
 
     set_auth_cookies(response, issue.access_token, issue.refresh_token, request)
 
