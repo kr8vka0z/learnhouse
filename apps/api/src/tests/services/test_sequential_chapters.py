@@ -17,9 +17,8 @@ from src.db.courses.activities import Activity, ActivitySubTypeEnum, ActivityTyp
 from src.db.courses.assignments import (
     Assignment,
     AssignmentTask,
+    AssignmentTaskSubmissionUpdate,
     AssignmentTaskTypeEnum,
-    AssignmentUserSubmission,
-    AssignmentUserSubmissionStatus,
     GradingTypeEnum,
 )
 from src.db.courses.chapter_activities import ChapterActivity
@@ -36,7 +35,12 @@ from src.db.usergroups import UserGroup
 from src.services.ai.rag.access import can_read_activity
 from src.services.courses.activities.access import verify_activity_reader_access
 from src.services.courses.activities.activities import get_activity
-from src.services.courses.activities.assignments import create_assignment_submission
+from src.services.courses.activities.assignments import (
+    create_assignment_submission,
+    grade_assignment_submission,
+    handle_assignment_task_submission,
+    retry_assignment_submission,
+)
 from src.services.courses.chapters import get_chapter, get_course_chapters
 from src.services.courses.sequential import (
     ChapterOutline,
@@ -110,17 +114,22 @@ async def _add_activity(db, org, course, chapter, activity_id, order, *, assignm
     return a
 
 
-async def _add_assignment(db, org, course, chapter, activity, *, auto_grading, task_type):
+async def _add_assignment(db, org, course, chapter, activity, *, auto_grading):
+    """One short-answer task whose correct answer is "4", so the real submit and
+    grade paths can produce a pass or a fail."""
     asg = Assignment(
         id=activity.id, title=f"Quiz {activity.id}", description="x", due_date="2099-01-01",
         published=True, grading_type=GradingTypeEnum.PERCENTAGE, auto_grading=auto_grading,
+        allow_retries=True, max_retries=0,
         org_id=org.id, course_id=course.id, chapter_id=chapter.id, activity_id=activity.id,
         assignment_uuid=f"assignment_{activity.id}", creation_date=NOW, update_date=NOW,
     )
     db.add(asg)
     db.add(AssignmentTask(
-        title="Q", description="", hint="", reference_file=None, assignment_type=task_type,
-        contents={}, max_grade_value=100, assignment_id=asg.id, org_id=org.id,
+        title="Q", description="", hint="", reference_file=None,
+        assignment_type=AssignmentTaskTypeEnum.SHORT_ANSWER,
+        contents={"correct_answers": ["4"], "match_mode": "exact"},
+        max_grade_value=100, assignment_id=asg.id, org_id=org.id,
         course_id=course.id, chapter_id=chapter.id, activity_id=activity.id,
         assignment_task_uuid=f"assignmenttask_{activity.id}", creation_date=NOW, update_date=NOW,
     ))
@@ -128,13 +137,14 @@ async def _add_assignment(db, org, course, chapter, activity, *, auto_grading, t
     return asg
 
 
-async def _submission(db, user, assignment, status):
-    db.add(AssignmentUserSubmission(
-        user_id=user.id, assignment_id=assignment.id, grade=0, submission_status=status,
-        attempt_number=1, assignmentusersubmission_uuid=f"aus_{assignment.id}_{user.id}",
-        creation_date=NOW, update_date=NOW,
-    ))
-    await db.commit()
+async def _attempt(mock_request, db, user, assignment, answer):
+    """The student saves an answer and hands the attempt in (real write path;
+    auto-graded assignments are graded inside the submit)."""
+    await handle_assignment_task_submission(
+        mock_request, f"assignmenttask_{assignment.activity_id}",
+        AssignmentTaskSubmissionUpdate(task_submission={"answer": answer}), user, db,
+    )
+    await create_assignment_submission(mock_request, assignment.assignment_uuid, user, db)
 
 
 @pytest.fixture
@@ -145,7 +155,7 @@ async def layout(db, org, course, chapter, activity):
     await db.commit()
     ch1_quiz = await _add_activity(db, org, course, chapter, 2, 2, assignment=True)
     ch1_assignment = await _add_assignment(
-        db, org, course, chapter, ch1_quiz, auto_grading=True, task_type=AssignmentTaskTypeEnum.QUIZ,
+        db, org, course, chapter, ch1_quiz, auto_grading=True,
     )
     # An unpublished activity in chapter 1 must not count as required.
     await _add_activity(db, org, course, chapter, 3, 3, published=False)
@@ -153,7 +163,7 @@ async def layout(db, org, course, chapter, activity):
     ch2_page = await _add_activity(db, org, course, ch2, 4, 1)
     ch2_quiz = await _add_activity(db, org, course, ch2, 5, 2, assignment=True)
     ch2_assignment = await _add_assignment(
-        db, org, course, ch2, ch2_quiz, auto_grading=True, task_type=AssignmentTaskTypeEnum.QUIZ,
+        db, org, course, ch2, ch2_quiz, auto_grading=True,
     )
     return {
         "ch1_page": activity, "ch1_quiz": ch1_quiz, "ch1_assignment": ch1_assignment,
@@ -180,38 +190,10 @@ async def _complete(mock_request, db, user, activity):
 
 
 async def _finish_chapter_one(mock_request, db, user, layout):
-    """Page through the real completion path; the auto-graded quiz as the
-    state a passed quiz leaves (complete trail step + GRADED submission)."""
+    """Page and quiz through the real paths: the page marked done, the
+    auto-graded quiz handed in with the right answer (a pass completes it)."""
     await _complete(mock_request, db, user, layout["ch1_page"])
-    await _mark_trail_step(db, user, layout["ch1_quiz"], complete=True)
-    await _submission(db, user, layout["ch1_assignment"], AssignmentUserSubmissionStatus.GRADED)
-
-
-async def _mark_trail_step(db, user, activity, *, complete):
-    from sqlmodel import select
-
-    from src.db.trail_runs import TrailRun
-    from src.db.trail_steps import TrailStep
-    from src.db.trails import Trail
-
-    run = (await db.execute(
-        select(TrailRun).where(TrailRun.user_id == user.id, TrailRun.course_id == activity.course_id)
-    )).scalars().first()
-    if run is None:
-        trail = Trail(org_id=activity.org_id, user_id=user.id, trail_uuid=f"trail_{user.id}",
-                      creation_date=NOW, update_date=NOW)
-        db.add(trail)
-        await db.commit()
-        run = TrailRun(trail_id=trail.id, course_id=activity.course_id, org_id=activity.org_id,
-                       user_id=user.id, creation_date=NOW, update_date=NOW)
-        db.add(run)
-        await db.commit()
-    db.add(TrailStep(
-        complete=complete, teacher_verified=False, grade="", trailrun_id=run.id,
-        trail_id=run.trail_id, activity_id=activity.id, course_id=activity.course_id,
-        org_id=activity.org_id, user_id=user.id, creation_date=NOW, update_date=NOW,
-    ))
-    await db.commit()
+    await _attempt(mock_request, db, user, layout["ch1_assignment"], "4")
 
 
 class TestSettingOff:
@@ -249,8 +231,7 @@ class TestTreeGate:
         # A failed auto-graded quiz: graded, but its trail step is not complete
         # (completion = passed). Being graded must not count as done.
         await _complete(mock_request, db, regular_user, layout["ch1_page"])
-        await _mark_trail_step(db, regular_user, layout["ch1_quiz"], complete=False)
-        await _submission(db, regular_user, layout["ch1_assignment"], AssignmentUserSubmissionStatus.GRADED)
+        await _attempt(mock_request, db, regular_user, layout["ch1_assignment"], "5")
         tree = await _tree(mock_request, db, course, regular_user)
         assert tree[2].is_locked
 
@@ -262,18 +243,23 @@ class TestTreeGate:
         await db.commit()
         await _complete(mock_request, db, regular_user, layout["ch1_page"])
         # Submitted, waiting for the instructor, no complete trail step yet.
-        await _submission(db, regular_user, layout["ch1_assignment"], AssignmentUserSubmissionStatus.SUBMITTED)
+        await _attempt(mock_request, db, regular_user, layout["ch1_assignment"], "4")
         tree = await _tree(mock_request, db, course, regular_user)
         assert not tree[2].is_locked
 
     async def test_retry_reset_manual_submission_does_not_count(
-        self, mock_request, db, course, regular_user, layout
+        self, mock_request, db, course, regular_user, admin_user, layout
     ):
         layout["ch1_assignment"].auto_grading = False
         db.add(layout["ch1_assignment"])
         await db.commit()
         await _complete(mock_request, db, regular_user, layout["ch1_page"])
-        await _submission(db, regular_user, layout["ch1_assignment"], AssignmentUserSubmissionStatus.PENDING)
+        # Handed in, graded as a fail by the instructor, then retried: the row
+        # is PENDING again with nothing handed in for this attempt.
+        await _attempt(mock_request, db, regular_user, layout["ch1_assignment"], "5")
+        uuid = layout["ch1_assignment"].assignment_uuid
+        await grade_assignment_submission(mock_request, regular_user.id, uuid, admin_user, db)
+        await retry_assignment_submission(mock_request, uuid, regular_user, db)
         tree = await _tree(mock_request, db, course, regular_user)
         assert tree[2].is_locked
 
