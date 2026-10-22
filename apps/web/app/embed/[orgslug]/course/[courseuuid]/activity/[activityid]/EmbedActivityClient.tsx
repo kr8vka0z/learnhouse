@@ -8,6 +8,8 @@ import Image from 'next/image'
 import { CourseContext, CourseDispatchContext } from '@components/Contexts/CourseContext'
 import { useActivity } from '@/hooks/queries/useActivity'
 import { useCourseMeta } from '@/hooks/queries/useCourses'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 const Canva = lazy(() => import('@components/Objects/Activities/DynamicCanva/DynamicCanva'))
 const VideoActivity = lazy(() => import('@components/Objects/Activities/Video/Video'))
@@ -121,7 +123,8 @@ function useContentReady(activityType: string, activitySubType?: string) {
 function EmbedActivityClient({ activityId, courseuuid, orgslug, bgcolor }: EmbedActivityClientProps) {
   const { t } = useTranslation()
   const searchParams = useSearchParams()
-  const showLearnHouseLogo = searchParams.get('showlearnhouselogo') !== 'false'
+  // Rescue Ready fork: no "Powered by" badge in white-label, whatever the URL says.
+  const showLearnHouseLogo = !RR_WHITE_LABEL && searchParams.get('showlearnhouselogo') !== 'false'
   const textColor = searchParams.get('textcolor')
 
   const { data: activity, isLoading: activityLoading } = useActivity(activityId)
@@ -166,6 +169,8 @@ function EmbedActivityClient({ activityId, courseuuid, orgslug, bgcolor }: Embed
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-8">
         <div className="bg-white rounded-2xl nice-shadow p-8 max-w-md w-full text-center">
+          {/* Rescue Ready fork: no LearnHouse icon on this card in white-label. */}
+          {!RR_WHITE_LABEL && (
           <div className="mb-6">
             <Image
               src="/learnhouse_bigicon.png"
@@ -175,6 +180,7 @@ function EmbedActivityClient({ activityId, courseuuid, orgslug, bgcolor }: Embed
               className="mx-auto"
             />
           </div>
+          )}
           <h1 className="text-xl font-bold text-gray-900 mb-2">
             {t('embed.not_supported_title')}
           </h1>

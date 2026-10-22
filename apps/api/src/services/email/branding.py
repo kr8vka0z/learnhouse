@@ -17,9 +17,10 @@ The pieces, and where each one comes from:
                       absolute URL.
 * ``brand_color``:    ``customization.general.color``; tints the CTA button.
 * ``powered_by``:     ``customization.general.watermark``; renders the small
-                      "Powered by LearnHouse" footer line. Always on for the
-                      open-source edition and for SaaS free-plan orgs; a paid
-                      SaaS plan or an Enterprise licence may turn it off.
+                      "Powered by LearnHouse" footer line. Always on for SaaS
+                      free-plan orgs; a paid SaaS plan, an Enterprise licence
+                      or (Rescue Ready fork) the open-source edition may turn
+                      it off.
 """
 
 from __future__ import annotations
@@ -100,8 +101,8 @@ def resolve_org_brand_color(org_config) -> Optional[str]:
 def resolve_org_powered_by(org_config) -> bool:
     """Whether this org's mail carries the "Powered by LearnHouse" line.
 
-    Always shown on the open-source edition: attribution is part of the OSS
-    deal, whatever the stored ``watermark`` flag says. On SaaS it is always
+    (Rescue Ready fork: the open-source edition honours the ``watermark``
+    toggle too; upstream always showed it there.) On SaaS it is always
     shown for a free-plan org (the write path refuses to persist ``false`` for
     them, but a plan downgrade leaves the old value in place). A paid SaaS
     plan or an Enterprise licence honours the org's ``watermark`` toggle.
@@ -109,8 +110,10 @@ def resolve_org_powered_by(org_config) -> bool:
     from src.core.deployment_mode import get_deployment_mode
 
     mode = get_deployment_mode()
-    if mode == "oss":
-        return True
+    # Rescue Ready fork: no forced "Powered by" on the open-source edition.
+    # The fork's deployment is white-label, so OSS honours the org's
+    # watermark toggle like EE does (default stays on). The AGPL source
+    # offer is met by the site's source-code link, not this email line.
 
     config = getattr(org_config, "config", None)
     if not isinstance(config, dict):

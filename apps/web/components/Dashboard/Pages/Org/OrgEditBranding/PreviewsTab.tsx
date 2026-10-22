@@ -19,6 +19,9 @@ import { Button } from '@components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@components/ui/dialog'
 import { BrandingSection, ImageDropzone, SpecList, useAssetUpload } from './BrandingShared'
 import { ExploreCardVignette, GalleryVignette, LinkPreviewVignette } from './BrandingVignettes'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
+import { getLEARNHOUSE_DOMAIN_VAL } from '@services/config/config'
 
 const ACCEPT = constructAcceptValue(['png', 'jpg'])
 const MAX_PREVIEWS = 4
@@ -262,7 +265,8 @@ export default function PreviewsTab() {
             <LinkPreviewVignette
               thumbnailUrl={thumbnailUrl}
               name={org?.name}
-              host={org?.slug ? `${org.slug}.learnhouse.io` : undefined}
+              // Rescue Ready fork: a self-hosted white-label site shows its own host.
+              host={RR_WHITE_LABEL ? getLEARNHOUSE_DOMAIN_VAL() : org?.slug ? `${org.slug}.learnhouse.io` : undefined}
               label={t('dashboard.organization.branding.vignettes.link_preview')}
             />
           </>

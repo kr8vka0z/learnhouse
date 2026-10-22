@@ -2,7 +2,8 @@
 # Writes deploy/local-preview/.env from .env.example, filling every empty
 # value with a fresh random secret. Refuses to overwrite an existing .env,
 # because the database volume keeps the old Postgres password.
-# Usage: ./make-env.sh [port]   (default port 3300)
+# Usage: ./make-env.sh [port] [project]   (defaults: 3300, lh-preview)
+# A second stack beside a running one needs its own port and project name.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -12,12 +13,14 @@ if [ -e .env ]; then
 fi
 
 port="${1:-3300}"
+project="${2:-lh-preview}"
 rand() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
 
 umask 077
 while IFS= read -r line; do
   case "$line" in
     HTTP_PORT=*) echo "HTTP_PORT=$port" ;;
+    COMPOSE_PROJECT_NAME=*) echo "COMPOSE_PROJECT_NAME=$project" ;;
     # Passwords get a fixed prefix so they always contain a letter, digit and symbol.
     *PASSWORD=) echo "${line}Pv-$(rand)" ;;
     [A-Z]*=) echo "${line}$(rand)" ;;
@@ -25,4 +28,4 @@ while IFS= read -r line; do
   esac
 done < .env.example > .env
 
-echo "Wrote $(pwd)/.env (port $port)."
+echo "Wrote $(pwd)/.env (port $port, project $project)."

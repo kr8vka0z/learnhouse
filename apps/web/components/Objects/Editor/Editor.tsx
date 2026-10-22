@@ -12,6 +12,9 @@ const ToolbarButtons = dynamic(
 import { motion } from 'motion/react'
 import Image from 'next/image'
 import { DividerVerticalIcon, SlashIcon } from '@radix-ui/react-icons'
+// Rescue Ready fork: white-label switch and a neutral home icon.
+import { HomeIcon } from '@radix-ui/react-icons'
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import learnhouseAI_icon from 'public/learnhouse_ai_simple.png'
 import {
   AIEditorStateTypes,
@@ -717,6 +720,15 @@ const EditorLearnHouseLogo = () => {
   const [animation] = React.useState(
     () => logoAnimations[Math.floor(Math.random() * logoAnimations.length)]
   )
+
+  // Rescue Ready fork: no LearnHouse mark in the editor in white-label.
+  if (RR_WHITE_LABEL) {
+    return (
+      <div className="bg-black rounded-md w-[25px] h-[25px] flex items-center justify-center text-white" aria-label="Home">
+        <HomeIcon />
+      </div>
+    )
+  }
 
   return (
     <div className="bg-black rounded-md w-[25px] h-[25px] flex items-center justify-center overflow-hidden">

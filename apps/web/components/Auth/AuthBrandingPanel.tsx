@@ -8,6 +8,8 @@ import OrgSquareLogo from '@components/Objects/Org/OrgSquareLogo'
 import { getUriWithOrg } from '@services/config/config'
 import { cn } from '@/lib/utils'
 import { usePlan } from '@components/Hooks/usePlan'
+// Rescue Ready fork: white-label switch.
+import { RR_AUTH_PANEL_GRADIENT, RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface AuthBrandingPanelProps {
   org: any
@@ -52,7 +54,7 @@ export default function AuthBrandingPanel({ org, welcomeText, title, subtitle }:
     if (background_type === 'gradient' || !background_image) {
       // Keep the original black gradient
       return {
-        background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+        background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
       }
     }
     if (background_type === 'custom' && background_image) {
@@ -70,7 +72,7 @@ export default function AuthBrandingPanel({ org, welcomeText, title, subtitle }:
       }
     }
     return {
-      background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+      background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
     }
   }
 
@@ -144,7 +146,8 @@ export default function AuthBrandingPanel({ org, welcomeText, title, subtitle }:
         <div className="relative z-10 flex flex-col h-full p-10">
           {/* Top bar with LearnHouse lrn.svg logo - hidden for enterprise users
               and for the no-org apex panel (platform shows no logo on the image). */}
-          {!isEnterprise && !noOrg && (
+          {/* Rescue Ready fork: also hidden in white-label (OSS shows it otherwise). */}
+          {!RR_WHITE_LABEL && !isEnterprise && !noOrg && (
             <div className="login-topbar">
               <Link prefetch href="https://learnhouse.app" target="_blank">
                 <img

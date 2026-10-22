@@ -4,7 +4,7 @@ Upstream LearnHouse has no `AGENTS.md`, so this file is entirely the Rescue Read
 
 ## Rescue Ready fork
 
-Stack: `apps/web` (Next.js/React), `apps/api` (FastAPI, SQLModel, Alembic, Postgres, Redis). OSS mode only: no `ee/` folders, no faking EE mode, don't edit `EE_ONLY_FEATURES`. Scope is module completion records; no time-on-task tracking, don't touch Tinybird/analytics.
+Stack: `apps/web` (Next.js/React), `apps/api` (FastAPI, SQLModel, Alembic, Postgres, Redis). OSS mode only: no `ee/` folders, no faking EE mode, don't edit `EE_ONLY_FEATURES`. Scope is module completion records and white-label branding (see FORK.md); no time-on-task tracking, don't touch Tinybird/analytics.
 
 ### Hard rules
 

@@ -17,6 +17,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { useTranslation } from 'react-i18next'
 import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface CourseRun {
   status: string
@@ -426,6 +428,8 @@ function CoursesActions({ courseuuid, orgslug, course, trailData }: CourseAction
                 {t('courses.you_own_this_course_description')}
               </p>
             </div>
+            {/* Rescue Ready fork: no self-service "Leave course" in white-label. */}
+            {!RR_WHITE_LABEL && (
             <button
               onClick={handleCourseAction}
               disabled={isActionLoading}
@@ -437,6 +441,7 @@ function CoursesActions({ courseuuid, orgslug, course, trailData }: CourseAction
                 : renderActionButton('leave')
               }
             </button>
+            )}
             {renderContributorButton()}
           </div>
         </div>
@@ -466,6 +471,9 @@ function CoursesActions({ courseuuid, orgslug, course, trailData }: CourseAction
         {renderProgressSection()}
 
         {/* Start/Leave Course Button */}
+        {/* Rescue Ready fork: no self-service "Leave course" in white-label;
+            leaving wipes the student's progress. Staff removal paths stay. */}
+        {!(RR_WHITE_LABEL && isStarted) && (
         <button
           onClick={handleCourseAction}
           disabled={isActionLoading}
@@ -482,6 +490,7 @@ function CoursesActions({ courseuuid, orgslug, course, trailData }: CourseAction
             renderActionButton(isStarted ? 'leave' : 'start')
           )}
         </button>
+        )}
 
         {/* Contributor Button */}
         {renderContributorButton()}

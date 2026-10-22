@@ -1,0 +1,61 @@
+/*
+  Rescue Ready fork: the fork's theme, layered over upstream's in one file so
+  an upstream merge never has to touch it. Imported once from globals.css.
+
+  Palette: primary navy #0B1F5C for primary fills and dark accents, and
+  #1A6FA8 as the accent shade that has to work as text and as a fill under
+  white text (5.4:1 against white either way, WCAG AA). The org's own brand
+  color (org settings) still drives the top menu bar.
+*/
+
+/* The UI's accent shades are mostly Tailwind blue/indigo 600/700 utilities;
+   redefining the two shades recolors them everywhere (text, fill, border)
+   without editing components. Only shades whose replacement keeps AA in both
+   text and fill use are remapped. */
+@theme {
+  --color-blue-600: #1a6fa8;
+  --color-blue-700: #0b1f5c;
+  --color-indigo-600: #1a6fa8;
+  --color-indigo-700: #0b1f5c;
+}
+
+/* shadcn tokens (HSL triplets). Unlayered, so they beat upstream's values in
+   @layer base; dark mode keeps upstream's. */
+:root:not(.dark) {
+  --primary: 225 79% 20%;          /* #0B1F5C */
+  --primary-foreground: 0 0% 100%;
+  --ring: 204 73% 38%;             /* #1A6FA8, focus ring on light surfaces */
+}
+
+/* Body face: Inter replaces Wix Madefor Text as the default. html:root
+   outranks next/font's class selector that sets --font-default. Arabic still
+   switches to Tajawal through globals.css. */
+html:root {
+  --font-default: var(--font-rr-body);
+}
+
+/* Auth pages (wrapped in .rr-auth by app/auth/layout.tsx in white-label):
+   their primary buttons are hard-coded bg-black. Navy fill, deep-navy hover;
+   white text is 14:1 and higher on both. Unlayered, so it beats the
+   utilities. Translucent bg-black/NN scrims are separate classes and stay. */
+.rr-auth .bg-black {
+  background-color: #0b1f5c;
+}
+.rr-auth .hover\:bg-black\/85:hover,
+.rr-auth .hover\:bg-black\/90:hover,
+.rr-auth .hover\:bg-gray-800:hover {
+  background-color: #00032e;
+}
+
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-rr-heading), var(--font-default), sans-serif;
+  }
+  /* Sora has no Arabic glyphs; RTL headings keep the inherited Tajawal. And
+     when staff pick a custom font (org settings), the withmenu layout sets it
+     as an inline font-family on .lh-org-font-root; headings inherit it then. */
+  [dir='rtl'] :is(h1, h2, h3, h4, h5, h6),
+  .lh-org-font-root[style*='font-family'] :is(h1, h2, h3, h4, h5, h6) {
+    font-family: inherit;
+  }
+}

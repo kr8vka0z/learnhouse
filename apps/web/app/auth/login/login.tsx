@@ -882,12 +882,23 @@ const LoginClient = (props: LoginClientProps) => {
               )}
 
               {/* Sign Up Link */}
+              {/* Rescue Ready fork: only when the org's join method is open; an
+                  invite-only org's sign-up page just says "invite required".
+                  Same config read as app/auth/signup/signup.tsx. */}
+              {(() => {
+                const cfg = props.org?.config?.config
+                const mode = cfg?.config_version?.startsWith('2')
+                  ? cfg?.admin_toggles?.members?.signup_mode
+                  : cfg?.features?.members?.signup_mode
+                return !props.org || (mode || 'open') === 'open'
+              })() && (
               <p className="text-center text-sm text-black/35 mt-6">
                 {t('auth.no_account')}{' '}
                 <Link href="/signup" className="text-black font-semibold hover:underline">
                   {t('auth.sign_up')}
                 </Link>
               </p>
+              )}
             </div>
               </>
             )}

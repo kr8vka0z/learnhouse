@@ -11,6 +11,8 @@ import CommandPalette from '@components/Dashboard/CommandPalette/CommandPalette'
 import { UpgradeModalProvider } from '@components/Dashboard/Shared/PlanRestricted/UpgradeModalContext'
 import React from 'react'
 import { useMediaQuery } from 'usehooks-ts';
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 function ClientAdminLayout({
     children,
@@ -42,7 +44,8 @@ function ClientAdminLayout({
                                 {children}
                                 <OnboardingTracker />
                             </div>
-                            <WelcomeModal />
+                            {/* Rescue Ready fork: the first-run tour is a LearnHouse product welcome; skipped in white-label. */}
+                            {!RR_WHITE_LABEL && <WelcomeModal />}
                             <CommandPalette />
                         </div>
                     </UpgradeModalProvider>

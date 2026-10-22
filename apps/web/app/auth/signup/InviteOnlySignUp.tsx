@@ -22,6 +22,8 @@ import CustomSignupFields, {
   validateCustomFields,
 } from '@components/Auth/CustomSignupFields'
 import { readSignupFields, type SignupFieldItem } from '@services/settings/org'
+// Rescue Ready fork: respect the org's allowed sign-in methods.
+import { getAllowedAuthMethods } from '@services/auth/authMethods'
 
 const validate = (values: any, t: any, customFields: SignupFieldItem[]) => {
   const errors: any = {}
@@ -362,6 +364,9 @@ function InviteOnlySignUpComponent(props: InviteOnlySignUpProps) {
         </FormLayout>
 
         {/* Divider */}
+        {/* Rescue Ready fork: offer Google only when the org allows it, like
+            the login and open sign-up pages (getAllowedAuthMethods). */}
+        {getAllowedAuthMethods(org).has('google') && (<>
         <div className="relative my-6">
           <div className="absolute inset-0 flex items-center">
             <div className="w-full border-t border-neutral-200" />
@@ -380,6 +385,7 @@ function InviteOnlySignUpComponent(props: InviteOnlySignUpProps) {
           <img src="https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg" alt="" className="w-4 h-4" />
           <span>{t('auth.sign_in_with_google')}</span>
         </button>
+        </>)}
 
         {/* Login Link */}
         <p className="text-center text-sm text-black/35 mt-6">

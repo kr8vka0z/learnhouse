@@ -3,7 +3,8 @@ import React from 'react'
 import ClientAdminLayout from './ClientAdminLayout'
 
 export const metadata: Metadata = {
-  title: 'LearnHouse Dashboard',
+  // Rescue Ready fork: white-label; staff see no platform name in the tab.
+  title: 'Dashboard',
 }
 
 async function DashboardLayout(

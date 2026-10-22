@@ -1,5 +1,8 @@
 'use client'
 import React from 'react'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
+import { getLEARNHOUSE_DOMAIN_VAL } from '@services/config/config'
 import {
   Browser,
   Certificate,
@@ -340,7 +343,10 @@ export function BrowserTabVignette({ faviconUrl, name, label }: BrowserTabVignet
         <div className="flex items-center gap-2 bg-white px-2 py-1.5">
           <span className="text-[9px] text-gray-300">‹ ›</span>
           <span className="flex h-4 flex-1 items-center rounded-full bg-[#f1f3f4] px-2 text-[8px] text-gray-500">
-            {name ? `${name.toLowerCase().replace(/\s+/g, '')}.learnhouse.io` : 'your-school.learnhouse.io'}
+            {/* Rescue Ready fork: a self-hosted white-label site shows its own host. */}
+            {RR_WHITE_LABEL
+              ? getLEARNHOUSE_DOMAIN_VAL()
+              : name ? `${name.toLowerCase().replace(/\s+/g, '')}.learnhouse.io` : 'your-school.learnhouse.io'}
           </span>
         </div>
         <div className="h-8 bg-[#f8f8f8]" />

@@ -38,6 +38,8 @@ import {
 import { FeedbackModal } from '@components/Objects/Modals/FeedbackModal'
 import { DASHBOARD_MENU_ITEMS, DashboardMenuItem } from '@/lib/dashboard-menu-items'
 import { isFeatureAvailable } from '@services/plans/plans'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import { getMenuColorClasses } from '@services/utils/ts/colorUtils'
 import AuthenticatedClientElement from '@components/Security/AuthenticatedClientElement'
 import { useJoinBannerVisible, JOIN_BANNER_HEIGHT } from '@components/Objects/Banners/OrgJoinBanner'
@@ -159,10 +161,14 @@ export const OrgMenu = (props: any) => {
                   {org?.logo_image ? (
                     <img
                       src={`${getOrgLogoMediaDirectory(org.org_uuid, org?.logo_image)}`}
-                      alt="Learnhouse"
+                      // Rescue Ready fork: alt names the org, not LearnHouse.
+                      alt={org?.name || ''}
                       style={{ width: 'auto', height: '100%' }}
                       className="rounded-md"
                     />
+                  ) : RR_WHITE_LABEL ? (
+                    // Rescue Ready fork: no logo uploaded yet -> org name, not the LearnHouse mark.
+                    <span className={`font-bold text-lg ${colors.text}`}>{org?.name}</span>
                   ) : (
                     <LearnHouseLogo logoFilter={colors.logoFilter} />
                   )}
@@ -287,7 +293,8 @@ export const OrgMenu = (props: any) => {
             )}
 
             {/* Help Dropdown - Only visible to admins/maintainers/instructors */}
-            {session?.status === 'authenticated' && rights?.dashboard?.action_access && (
+            {/* Rescue Ready fork: hidden in white-label; every item points at LearnHouse. */}
+            {!RR_WHITE_LABEL && session?.status === 'authenticated' && rights?.dashboard?.action_access && (
               <div className="hidden md:flex">
                 <DropdownMenu>
                   <TooltipProvider delayDuration={0}>

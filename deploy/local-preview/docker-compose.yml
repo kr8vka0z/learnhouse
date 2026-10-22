@@ -15,7 +15,9 @@ services:
       args:
         # OSS build: strips any ee/ folder from the web bundle.
         LEARNHOUSE_PUBLIC: "true"
-    image: lh-preview-app:local
+    # Tagged per compose project, so a second stack (COMPOSE_PROJECT_NAME in
+    # .env) builds its own image instead of retagging the first stack's.
+    image: ${COMPOSE_PROJECT_NAME:-lh-preview}-app:local
     restart: unless-stopped
     env_file:
       - .env
@@ -48,6 +50,9 @@ services:
       NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LEARNHOUSE_INITIAL_ORG_SLUG:-sample-school}
       NEXT_PUBLIC_LEARNHOUSE_HTTPS: "False"
       NEXT_PUBLIC_COLLAB_URL: ws://localhost:${HTTP_PORT:-3300}/collab
+      # AGPL "Source code" footer link; read at runtime, so it can differ per
+      # deployment without a rebuild.
+      NEXT_PUBLIC_RR_SOURCE_URL: ${NEXT_PUBLIC_RR_SOURCE_URL:-https://github.com/kr8vka0z/learnhouse}
     ports:
       - "127.0.0.1:${HTTP_PORT:-3300}:80"
     volumes:

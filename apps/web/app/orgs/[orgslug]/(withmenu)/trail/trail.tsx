@@ -17,6 +17,8 @@ import { BookOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import FeatureGate from '@components/Dashboard/Shared/FeatureGate/FeatureGate'
 import { useTrackView, AnalyticsEvent } from '@services/analytics'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 function Trail(params: any) {
   const { t } = useTranslation()
@@ -70,7 +72,8 @@ function Trail(params: any) {
       <div className="flex flex-col space-y-2 mb-6">
         <div className="flex items-center justify-between">
           <TypeOfContentTitle title={t('courses.progress')} type="tra" />
-          {trail?.runs?.length > 0 && (
+          {/* Rescue Ready fork: no self-service "Quit all courses" in white-label; it wipes progress. */}
+          {!RR_WHITE_LABEL && trail?.runs?.length > 0 && (
             <ConfirmationModal
               confirmationButtonText={isQuittingAll ? t('courses.quitting_courses', { progress: quittingProgress }) : t('courses.quit_all_courses')}
               confirmationMessage={t('courses.quit_all_courses_confirm')}

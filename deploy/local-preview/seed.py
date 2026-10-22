@@ -12,10 +12,14 @@ The org and admin already exist: the app creates them on first boot from the
 LEARNHOUSE_INITIAL_* values in .env.
 
 Usage:  ./seed.py            (DOCKER="sudo docker" ./seed.py if docker needs sudo)
-Re-running on a seeded stack only prints the summary; reset with `down -v`.
+Also white-labels the org (brand color, no "Powered by" watermark, logo files
+from PREVIEW_LOGO_FILE / PREVIEW_SQUARE_LOGO_FILE / PREVIEW_FAVICON_FILE when
+set). Re-running on a seeded stack re-applies the branding and prints the
+summary; reset with `down -v`.
 """
 
 import json
+import mimetypes
 import os
 import pathlib
 import shlex
@@ -23,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -39,6 +44,19 @@ ADMIN_EMAIL = ENV["LEARNHOUSE_INITIAL_ADMIN_EMAIL"]
 ADMIN_PASSWORD = ENV["LEARNHOUSE_INITIAL_ADMIN_PASSWORD"]
 STUDENT_PASSWORD = ENV["PREVIEW_STUDENT_PASSWORD"]
 DOCKER = shlex.split(os.environ.get("DOCKER", "docker"))
+
+
+def setting(name, default=""):
+    """A preview setting: the process environment first, then .env."""
+    return os.environ.get(name) or ENV.get(name) or default
+
+
+# Org branding, applied through the same org-settings endpoints the dashboard
+# uses. Image paths are optional; each one is uploaded only when set.
+LOGO_FILE = setting("PREVIEW_LOGO_FILE")                # wide logo, top menu bar
+SQUARE_LOGO_FILE = setting("PREVIEW_SQUARE_LOGO_FILE")  # sign-in panel, dashboard
+FAVICON_FILE = setting("PREVIEW_FAVICON_FILE")
+BRAND_COLOR = setting("PREVIEW_BRAND_COLOR", "#0B1F5C")
 FFMPEG_IMAGE = "jrottenberg/ffmpeg:6.1-alpine"
 
 COURSE_NAME = "Nursing Assistant Theory — Sample"
@@ -345,6 +363,44 @@ def quiz_attempt(tok, quiz, n_right, should_pass):
     return sub
 
 
+# --- Org branding -------------------------------------------------------------------
+
+def upload_image(tok, org_id, endpoint, field, path):
+    p = pathlib.Path(path).expanduser()
+    if not p.is_file():
+        sys.exit(f"{field}: no such file {p}")
+    mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    call("PUT", f"/orgs/{org_id}/{endpoint}", tok, form={field: f"@{p};type={mime}"})
+
+
+def brand_org(tok, org):
+    """White-label the org: brand color, no "Powered by" watermark (site and
+    email), mail sender name = org name, AI and unused features off (only
+    Courses stays in the menu), and the logo files
+    when given.
+    Idempotent, so it also runs on an already-seeded stack."""
+    org_id = org["id"]
+    q = urllib.parse.quote
+    call("PUT", f"/orgs/{org_id}/config/color?color={q(BRAND_COLOR)}", tok)
+    call("PUT", f"/orgs/{org_id}/config/watermark?watermark_enabled=false", tok)
+    call("PUT", f"/orgs/{org_id}/config/email_sender_name?email_sender_name={q(org['name'])}", tok)
+    # No AI key in a preview: turn the org's AI features off (same switch as
+    # Settings > AI), which also removes the "Ask AI" button for students.
+    call("PUT", f"/orgs/{org_id}/config/ai?ai_enabled=false&copilot_enabled=false", tok)
+    # Features the school doesn't use, off through the same per-feature
+    # switches as the dashboard, so the student menu shows only Courses.
+    # "folders" is the Library.
+    for feature in ("communities", "folders", "podcasts", "boards", "playgrounds"):
+        call("PUT", f"/orgs/{org_id}/config/{feature}?{feature}_enabled=false", tok)
+    for path, endpoint, field in ((LOGO_FILE, "logo", "logo_file"),
+                                  (SQUARE_LOGO_FILE, "square_logo", "square_logo_file"),
+                                  # The thumbnail is the org's link-preview image.
+                                  (SQUARE_LOGO_FILE, "thumbnail", "thumbnail_file"),
+                                  (FAVICON_FILE, "favicon", "favicon_file")):
+        if path:
+            upload_image(tok, org_id, endpoint, field, path)
+
+
 # --- Main -------------------------------------------------------------------------
 
 def find_course(tok):
@@ -367,6 +423,8 @@ def main():
     admin_tok, _ = login(ADMIN_EMAIL, ADMIN_PASSWORD)
     _, org = call("GET", f"/orgs/slug/{ORG_SLUG}", admin_tok)
     org_id = org["id"]
+    print("Branding the organization...")
+    brand_org(admin_tok, org)
 
     existing = find_course(admin_tok)
     if existing:

@@ -16,8 +16,9 @@ export const ERROR_CATALOG: ErrorCategory[] = [
   {
     kind: 'version_mismatch',
     title: 'The app just updated',
+    // Rescue Ready fork: neutral wording; white-label users never see the platform name.
     description:
-      'A new version of LearnHouse was released while this page was open, so it briefly fell out of sync. Reloading will pick up the latest version.',
+      'A new version of this site was released while this page was open, so it briefly fell out of sync. Reloading will pick up the latest version.',
     matchers: {
       statuses: [],
       messageIncludes: [
