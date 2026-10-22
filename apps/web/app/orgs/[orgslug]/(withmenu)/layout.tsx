@@ -17,7 +17,7 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { usePlan } from '@components/Hooks/usePlan'
 import { getGoogleFontUrl, DEFAULT_FONT } from '@/lib/fonts'
 // Rescue Ready fork: AGPL source-code link in the footer.
-import { resolveSourceCodeUrl } from '@/lib/rr/branding'
+import { RR_WHITE_LABEL, resolveSourceCodeUrl } from '@/lib/rr/branding'
 import { getConfig } from '@services/config/config'
 
 // Helper to convert hex to rgba
@@ -35,7 +35,8 @@ function OrgFooter() {
   const plan = usePlan()
   const watermarkConfig = org?.config?.config?.customization?.general?.watermark ?? org?.config?.config?.general?.watermark
   const isFree = plan === 'free'
-  const showWatermark = isFree || watermarkConfig !== false
+  // Rescue Ready fork: no LearnHouse footer mark on a white-label site.
+  const showWatermark = !RR_WHITE_LABEL && (isFree || watermarkConfig !== false)
 
   return (
     <footer className="w-full py-8 mt-12">

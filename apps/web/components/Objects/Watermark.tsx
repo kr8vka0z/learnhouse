@@ -6,6 +6,8 @@ import { useOrg } from '../Contexts/OrgContext'
 import { useTranslation } from 'react-i18next'
 import { usePlan } from '@components/Hooks/usePlan'
 import { getDeploymentMode } from '@services/config/config'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 function Watermark() {
     const { t } = useTranslation()
@@ -20,6 +22,8 @@ function Watermark() {
     //   2. SaaS free  → always shown (free tier is branded).
     //   3. Otherwise  → respect the admin's toggle (default on).
     if (mode === 'ee') return null
+    // Rescue Ready fork: never on a white-label site, whatever the toggle says.
+    if (RR_WHITE_LABEL) return null
     const showWatermark = plan === 'free' || watermarkConfig !== false
     if (!showWatermark) return null
 
