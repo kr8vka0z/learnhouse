@@ -118,6 +118,8 @@ _LOGGED_METADATA_FIELDS = (
     "attempt_number", "grade", "max_grade", "percentage", "display_grade",
     "letter_grade", "passed", "auto_graded", "grade_source", "completed_by",
     "method", "enrolled_by", "course_uuid", "assignment_uuid", "activity_type",
+    "removed_by", "api_token_id", "steps_deleted", "completed_steps_deleted",
+    "was_complete", "previous_status",
 )
 _LOG_LINE_CAP = 4000  # far below journald's 48 KiB line limit
 

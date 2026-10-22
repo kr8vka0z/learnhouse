@@ -70,6 +70,10 @@ _EVENT_LABELS = {
     UserAuditEventType.ASSIGNMENT_SUBMITTED: "Submitted an assignment",
     UserAuditEventType.ASSIGNMENT_GRADED: "Assignment graded",
     UserAuditEventType.CERTIFICATE_CLAIMED: "Claimed a certificate",
+    # Rescue Ready fork: admin undo actions on the student's record.
+    UserAuditEventType.COURSE_UNENROLLED: "Removed from a course",
+    UserAuditEventType.ACTIVITY_UNCOMPLETED: "Activity completion removed",
+    UserAuditEventType.COURSE_PROGRESS_RESET: "Course progress reset",
 }
 
 _VIEW_LABELS = {
