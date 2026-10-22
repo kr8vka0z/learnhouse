@@ -3180,6 +3180,15 @@ async def create_assignment_submission(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        # Rescue Ready fork: a first hand-in in a course the student never
+        # started enrolls them; record that like add_course_to_trail does.
+        await record_audit_event(
+            event_type=UserAuditEventType.COURSE_ENROLLED,
+            user_id=user.id,  # type: ignore
+            org_id=course.org_id,
+            target_uuid=course.course_uuid,
+            metadata={"course_name": course.name, "enrolled_by": "assignment_submission"},
+        )
 
     statement = select(TrailStep).where(
         TrailStep.trailrun_id == trailrun.id,

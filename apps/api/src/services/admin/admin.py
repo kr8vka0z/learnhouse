@@ -53,6 +53,9 @@ from src.services.orgs.users import _rights_within
 from src.services.analytics.analytics import track
 from src.services.analytics import events as analytics_events
 from src.services.webhooks.dispatch import dispatch_webhooks
+# Rescue Ready fork: admin-API enrollment/completion writes the student record.
+from src.services.audit.audit import record_audit_event
+from src.db.user_audit_events import UserAuditEventType
 from src.security.auth import create_access_token
 from src.security.org_auth import org_owns_account
 from src.security.session_context import AUTH_METHOD_API_TOKEN, session_claims
@@ -449,6 +452,51 @@ async def check_course_access(
 # -- Enrollment endpoints -----------------------------------------------------
 
 
+async def _rr_record_enrolled(user_id: int, course: Course, enrolled_by: str) -> None:
+    """Rescue Ready fork: COURSE_ENROLLED audit row for an admin-API enrollment.
+
+    The student self-enroll path (``add_course_to_trail``) already writes it;
+    these routes created the TrailRun with analytics only, so a student enrolled
+    by the school had no enrollment in their record.
+    """
+    await record_audit_event(
+        event_type=UserAuditEventType.COURSE_ENROLLED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=course.course_uuid,
+        metadata={"course_name": course.name, "enrolled_by": enrolled_by},
+    )
+
+
+async def _rr_record_completed(
+    user_id: int, course: Course, activity_uuid: str, activity_type: str
+) -> None:
+    """Rescue Ready fork: ACTIVITY_COMPLETED audit row for an admin-API completion
+    (these routes used to call ``track`` only, leaving no record)."""
+    await record_audit_event(
+        event_type=UserAuditEventType.ACTIVITY_COMPLETED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=activity_uuid,
+        metadata={
+            "course_uuid": course.course_uuid,
+            "course_name": course.name,
+            "activity_type": activity_type or "",
+            "completed_by": "admin_api",
+        },
+    )
+
+
+async def _rr_record_course_completed(user_id: int, course: Course) -> None:
+    await record_audit_event(
+        event_type=UserAuditEventType.COURSE_COMPLETED,
+        user_id=user_id,
+        org_id=course.org_id,
+        target_uuid=course.course_uuid,
+        metadata={"course_name": course.name, "completed_by": "admin_api"},
+    )
+
+
 async def enroll_user(
     request: Request,
     token_user: APITokenUser,
@@ -515,6 +563,7 @@ async def enroll_user(
         user_id=user_id,
         properties={"course_uuid": course.course_uuid},
     )
+    await _rr_record_enrolled(user_id, course, "admin_api")  # Rescue Ready fork
 
     trail_runs_raw = list((await db_session.execute(
         select(TrailRun).where(TrailRun.trail_id == trail.id, TrailRun.user_id == user_id)
@@ -703,6 +752,7 @@ async def complete_activity(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        await _rr_record_enrolled(user_id, course, "admin_api_completion")  # Rescue Ready fork
 
     # Check for existing step
     existing_step = (await db_session.execute(
@@ -877,6 +927,7 @@ async def complete_course(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        await _rr_record_enrolled(user_id, course, "admin_api_completion")  # Rescue Ready fork
 
     # Get all activities in the course
     chapter_activities = (await db_session.execute(
@@ -1867,6 +1918,7 @@ async def bulk_enroll_users(
             user_id=user_id,
             properties={"course_uuid": course.course_uuid},
         )
+        await _rr_record_enrolled(user_id, course, "admin_api_bulk")  # Rescue Ready fork
 
     return {
         "enrolled": enrolled,

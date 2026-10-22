@@ -160,3 +160,59 @@ class TestLoginAudit:
         assert r.status_code == 200 and r.json().get("tokens")
         rows = await _audit_rows(db, user_id, UserAuditEventType.LOGIN)
         assert [row.audit_metadata["method"] for row in rows] == ["email_verification"]
+
+
+# ---------------------------------------------------------------------------
+# Admin-API enrollment writes COURSE_ENROLLED
+# ---------------------------------------------------------------------------
+
+_ADMIN = "src.services.admin.admin."
+
+
+@pytest.fixture
+def token_user(org, admin_user):
+    from src.db.users import APITokenUser
+
+    rights = {
+        b: {"action_create": True, "action_read": True, "action_update": True, "action_delete": True}
+        for b in ("users", "roles", "courses", "certifications", "usergroups")
+    }
+    return APITokenUser(
+        id=1, user_uuid="apitoken_rr", username="api_token", org_id=org.id, rights=rights,
+        token_name="t", created_by_user_id=admin_user.id,
+    )
+
+
+@pytest.fixture
+def quiet_admin():
+    from unittest.mock import AsyncMock, patch
+
+    with patch(_ADMIN + "track", new_callable=AsyncMock), \
+         patch(_ADMIN + "dispatch_webhooks", new_callable=AsyncMock), \
+         patch(_ADMIN + "check_course_completion_and_create_certificate", new_callable=AsyncMock,
+               return_value=False):
+        yield
+
+
+class TestAdminEnrollmentAudit:
+    async def test_enroll_user_writes_course_enrolled(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, regular_user, course
+    ):
+        from src.services.admin.admin import enroll_user
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        await enroll_user(mock_request, token_user, user_id, course_uuid, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_ENROLLED)
+        assert [r.target_uuid for r in rows] == [course_uuid]
+
+    async def test_bulk_enroll_writes_one_row_per_new_enrollment(
+        self, audit_to_test_db, quiet_admin, db, mock_request, token_user, regular_user, course
+    ):
+        from src.services.admin.admin import bulk_enroll_users
+
+        user_id, course_uuid = regular_user.id, course.course_uuid
+        await bulk_enroll_users(token_user, course_uuid, [user_id], mock_request, db)
+        # Already enrolled the second time: no second row.
+        await bulk_enroll_users(token_user, course_uuid, [user_id], mock_request, db)
+        rows = await _audit_rows(db, user_id, UserAuditEventType.COURSE_ENROLLED)
+        assert [r.target_uuid for r in rows] == [course_uuid]

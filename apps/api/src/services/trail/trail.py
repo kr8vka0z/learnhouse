@@ -288,6 +288,15 @@ async def add_activity_to_trail(
         db_session.add(trailrun)
         await db_session.commit()
         await db_session.refresh(trailrun)
+        # Rescue Ready fork: completing an activity in a course the student never
+        # started enrolls them; record that like add_course_to_trail does.
+        await record_audit_event(
+            event_type=UserAuditEventType.COURSE_ENROLLED,
+            user_id=user.id,
+            org_id=course.org_id,
+            target_uuid=course.course_uuid,
+            metadata={"course_name": course.name, "enrolled_by": "activity_completion"},
+        )
 
     statement = select(TrailStep).where(
         TrailStep.trailrun_id == trailrun.id, TrailStep.activity_id == activity.id, TrailStep.user_id == user.id
