@@ -6,6 +6,7 @@ import { getAPIUrl } from '@services/config/config'
 import { useLHSession } from '@components/Contexts/LHSessionContext'
 import { useOrg } from '@components/Contexts/OrgContext'
 import { fullName, fmtDateTime, fmtDate, fmtDuration } from './format'
+import CompletionReportMenuItems from './CompletionReportMenuItems' // Rescue Ready fork
 
 type Fmt = 'csv' | 'json' | 'pdf'
 
@@ -270,6 +271,14 @@ export default function UserAuditExport({ userIds, days = 365, defaultDossier, l
               {f}
             </button>
           ))}
+          {/* Rescue Ready fork: per-course completion report for a single student. */}
+          {ids.length === 1 && defaultDossier && (
+            <CompletionReportMenuItems
+              userId={ids[0]}
+              courses={defaultDossier.courses || []}
+              onDone={() => setOpen(false)}
+            />
+          )}
           <label className="flex items-start gap-2 px-3 py-2 text-[11px] text-gray-500 border-t border-gray-100 cursor-pointer">
             <input
               type="checkbox"

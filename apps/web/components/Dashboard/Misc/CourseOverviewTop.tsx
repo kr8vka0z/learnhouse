@@ -21,6 +21,7 @@ import { queryKeys } from '@/lib/query/keys'
 import toast from 'react-hot-toast'
 import { useState, useCallback } from 'react'
 import { useLHAnalytics, AnalyticsEvent } from '@services/analytics'
+import CourseCompletionRecordsButton from '@components/Dashboard/Pages/Course/CourseCompletionRecords/CourseCompletionRecordsButton' // Rescue Ready fork
 
 export function CourseOverviewTop({
   params,
@@ -259,6 +260,8 @@ export function CourseOverviewTop({
               </TooltipProvider>
             </>
           )}
+          {/* Rescue Ready fork: course-level completion records CSV (renders only for org admins). */}
+          <CourseCompletionRecordsButton courseUuid={courseStructure.course_uuid} />
           <div className="w-px self-stretch bg-neutral-200/80" />
           <Link
             href={getUriWithOrg(org?.slug, '') + `/course/${params.courseuuid}`}
