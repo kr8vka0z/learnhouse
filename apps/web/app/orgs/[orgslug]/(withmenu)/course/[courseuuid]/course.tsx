@@ -268,7 +268,9 @@ const CourseClient = (props: any) => {
       return cleanRunCourseUuid === cleanCourseUuid
     })
     if (!run || !Array.isArray(run.steps)) return false
-    return !!run.steps.find((step: any) => step.activity_id == activity.id)
+    // Rescue Ready fork: a submitted-but-not-passed assignment has a step with
+    // complete=false; only a complete step is done (matches the server gate).
+    return !!run.steps.find((step: any) => step.activity_id == activity.id && step.complete === true)
   }
 
   const isActivityCurrent = (activity: any) => {
