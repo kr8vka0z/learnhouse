@@ -31,7 +31,7 @@ from src.security.auth import (
 )
 from src.services.users.users import security_get_user
 from src.services.auth.utils import signWithGoogle, get_google_user_info
-from src.services.audit.audit import record_audit_event
+from src.services.audit.audit import extract_request_context, record_audit_event
 from src.db.user_audit_events import UserAuditEventType
 from src.services.dev.dev import isDevModeEnabled
 from src.services.security.rate_limiting import (
@@ -1185,7 +1185,7 @@ async def _record_login_quietly(
     # sits outside the try (own session, never raises) so a last-login hiccup
     # does not also drop the LOGIN row.
     user_id = user.id
-    client_ip = get_client_ip(request)
+    client_ip, user_agent = extract_request_context(request)  # never raises
     try:
         await update_login_info(user, client_ip, db_session)
     except Exception:
@@ -1197,7 +1197,7 @@ async def _record_login_quietly(
         user_id=user_id,
         org_id=org_id,
         ip=client_ip,
-        user_agent=request.headers.get("user-agent"),
+        user_agent=user_agent,
         metadata={"method": method},
     )
 
