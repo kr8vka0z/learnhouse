@@ -357,6 +357,17 @@ v1_router.include_router(
     dependencies=[Depends(require_authenticated_user)],
 )
 
+# Rescue Ready fork: per-student/per-course completion report (official module
+# completion record). Own router so upstream edits to routers/audit.py merge cleanly.
+from src.routers import completion_report as completion_report_router_module  # noqa: E402
+
+v1_router.include_router(
+    completion_report_router_module.router,
+    prefix="/audit",
+    tags=["audit"],
+    dependencies=[Depends(require_authenticated_user)],
+)
+
 v1_router.include_router(
     code_execution.router,
     prefix="/code",
