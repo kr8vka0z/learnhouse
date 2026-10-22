@@ -107,3 +107,8 @@ class ActivityRead(ActivityBase):
     last_modified_by_username: Optional[str] = None
     # Computed per-request: true if current user cannot access this activity.
     is_locked: bool = False
+    # Rescue Ready fork: why it is locked, so the client can say "finish X to
+    # unlock". "sequential" (with lock_requires_chapter) for the pass-to-unlock
+    # gate; None for the upstream access tiers. Additive, so old clients ignore it.
+    lock_reason: Optional[str] = None
+    lock_requires_chapter: Optional[dict] = None

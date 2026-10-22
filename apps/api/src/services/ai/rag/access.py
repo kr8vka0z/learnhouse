@@ -169,6 +169,20 @@ async def readable_activity_ids(
         grant = scope.courses[activity.course_id]
         if await _activity_readable(activity, chapter, grant, scope, accessible, db_session):
             readable.add(activity_id)
+
+    # Rescue Ready fork: pass-to-unlock chapter gating. Admins and course
+    # authors bypass, as they do for the lock tiers above.
+    from src.services.courses.sequential import sequential_locked_activity_ids
+    readable -= await sequential_locked_activity_ids(
+        [
+            (aid, activity.course_id, chapter.id if chapter is not None else None)
+            for aid, (activity, chapter) in activities.items()
+            if aid in readable
+            and not (scope.courses[activity.course_id].is_admin or scope.courses[activity.course_id].is_author)
+        ],
+        scope.current_user,
+        db_session,
+    )
     return readable
 
 
