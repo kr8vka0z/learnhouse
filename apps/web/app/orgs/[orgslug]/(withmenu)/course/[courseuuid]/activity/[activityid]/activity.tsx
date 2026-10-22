@@ -2118,7 +2118,8 @@ function AssignmentTools(props: {
                   </p>
                 )}
 
-                {allowRetries && (
+                {/* Rescue Ready fork: also shown with retries off, for the out-of-attempts notice. */}
+                {(allowRetries || outOfAttempts) && (
                   <div className="pt-2">
                     {canRetry ? (
                       <div className="rounded-xl border border-fuchsia-100 bg-gradient-to-br from-fuchsia-50 via-pink-50 to-rose-50 p-4">

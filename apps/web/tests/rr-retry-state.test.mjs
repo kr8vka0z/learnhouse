@@ -34,7 +34,11 @@ describe("getRetryState", () => {
     expect(getRetryState({ ...base, pastDue: true })).toBe("none");
   });
 
-  test("retries switched off shows nothing", () => {
-    expect(getRetryState({ ...base, allowRetries: false, maxRetries: 0 })).toBe("none");
+  test("retries off and failed is out of attempts (an instructor can still grant one)", () => {
+    expect(getRetryState({ ...base, allowRetries: false, maxRetries: 0 })).toBe("out_of_attempts");
+  });
+
+  test("retries off and passed shows nothing", () => {
+    expect(getRetryState({ ...base, allowRetries: false, maxRetries: 0, passed: true })).toBe("none");
   });
 });
