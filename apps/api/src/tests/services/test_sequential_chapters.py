@@ -37,7 +37,7 @@ from src.services.ai.rag.access import can_read_activity
 from src.services.courses.activities.access import verify_activity_reader_access
 from src.services.courses.activities.activities import get_activity
 from src.services.courses.activities.assignments import create_assignment_submission
-from src.services.courses.chapters import get_course_chapters
+from src.services.courses.chapters import get_chapter, get_course_chapters
 from src.services.courses.sequential import (
     ChapterOutline,
     compute_sequential_locks,
@@ -298,6 +298,13 @@ class TestTreeGate:
 
 
 class TestDirectAccessRefused:
+    async def test_single_chapter_read_is_locked(self, mock_request, db, regular_user, layout):
+        # The one-chapter read sees only that chapter; the lock still needs
+        # the whole course's order.
+        chapter = await get_chapter(mock_request, layout["ch2"].id, regular_user, db)
+        assert chapter.is_locked
+        assert all(a.is_locked and a.content == {} for a in chapter.activities)
+
     async def test_single_activity_read_is_scrubbed(self, mock_request, db, regular_user, layout):
         result = await get_activity(mock_request, layout["ch2_page"].activity_uuid, regular_user, db)
         assert result.is_locked and result.content == {} and result.lock_reason == "sequential"

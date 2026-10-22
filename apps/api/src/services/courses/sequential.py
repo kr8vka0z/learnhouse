@@ -19,7 +19,7 @@ cleanly; the hooks into upstream files are a few marked lines each.
 """
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 from sqlalchemy import and_, exists, or_, union
 from sqlmodel import select
@@ -156,21 +156,6 @@ async def load_course_outline(course_id: int, db_session: AsyncSession) -> list[
     ]
 
 
-def outline_from_chapter_reads(chapters: Iterable) -> list[ChapterOutline]:
-    """Build the outline from an already-loaded chapter tree (``ChapterRead``)."""
-    outline = []
-    for chapter in chapters:
-        published = [a for a in chapter.activities if a.published]
-        outline.append(ChapterOutline(
-            chapter_id=chapter.id,
-            chapter_uuid=chapter.chapter_uuid,
-            name=chapter.name,
-            activity_ids=tuple(a.id for a in published),
-            activity_uuids=tuple(a.activity_uuid for a in published),
-        ))
-    return outline
-
-
 async def done_activity_ids(user_id: int, course_id: int, db_session: AsyncSession) -> set[int]:
     """Activities this user has done in this course, in one query.
 
@@ -305,9 +290,10 @@ async def apply_sequential_locks_to_chapters(
     """
     if not chapters or not is_sequential(course):
         return
-    locks = await sequential_locks_for_user(
-        course, current_user, db_session, outline=outline_from_chapter_reads(chapters)
-    )
+    # Always the full course outline from the database, not the tree in hand:
+    # the single-chapter read passes one chapter, and the tree may include
+    # unpublished rows for some callers.
+    locks = await sequential_locks_for_user(course, current_user, db_session)
     if not locks:
         return
     # Course editors (contributors/authors) bypass, as they do on the
