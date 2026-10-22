@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { getUriWithOrg } from '@services/config/config'
-import { BookOpenCheck, CheckCircle, ChevronLeft, ChevronRight, MessageSquare, UserRoundPen, Edit2, Loader2, Maximize2, Minimize2, Trophy, Sparkles, XCircle, Lock, RotateCcw, Infinity as InfinityIcon } from 'lucide-react'
+import { BookOpenCheck, CheckCircle, ChevronLeft, ChevronRight, MessageSquare, UserRoundPen, Edit2, Loader2, Maximize2, Minimize2, Trophy, Sparkles, XCircle, Lock, RotateCcw, Info, Infinity as InfinityIcon } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { markActivityAsComplete, unmarkActivityAsComplete } from '@services/courses/activity'
 import { usePathname, useRouter } from 'next/navigation'
@@ -64,6 +64,7 @@ const AssignmentStudentActivity = lazy(() => import('@components/Objects/Activit
 // what the API will actually accept. Static import: it's a pure function, and
 // gating render on the lazy chunk would flash the wrong control.
 import { isAssignmentPastDue } from '@components/Objects/Activities/Assignment/AssignmentStudentActivity'
+import { getRetryState } from '@/lib/assignments/retryState'
 const AIActivityAsk = lazy(() => import('@components/Objects/Activities/AI/AIActivityAsk'))
 const AISidePanelContentWrapper = lazy(() => import('@components/Objects/Activities/AI/AIActivityAsk').then(mod => ({ default: mod.AISidePanelContentWrapper })))
 const AISidePanelInline = lazy(() => import('@components/Objects/Activities/AI/AIActivityAsk').then(mod => ({ default: mod.AISidePanelInline })))
@@ -1656,6 +1657,11 @@ function AssignmentTools(props: {
           // next sequential chapter.
           refreshAfterSequentialProgress(queryClient, props.course)
         }
+        else if (res.status === 400 && typeof res.data?.detail === 'string') {
+          // Rescue Ready fork: a 400 carries the reason (e.g. an essay outside
+          // its word limits), which the generic error would hide.
+          toast.error(res.data.detail)
+        }
         else {
           toast.error(t('assignments.failed_submit_assignment'))
         }
@@ -1925,6 +1931,11 @@ function AssignmentTools(props: {
     const retryPastDue = isAssignmentPastDue(props.assignment?.due_date);
     const canRetry =
       allowRetries && !retryPastDue && (maxRetries === 0 || currentAttempt < maxRetries);
+    // Rescue Ready fork: completion needs a pass, so a student who failed every
+    // allowed attempt is stuck until an instructor grants one; tell them so.
+    const outOfAttempts =
+      getRetryState({ allowRetries, maxRetries, currentAttempt, passed, pastDue: retryPastDue }) ===
+      'out_of_attempts';
 
     return (
       <>
@@ -2160,6 +2171,18 @@ function AssignmentTools(props: {
                           functionToExecute={retrySubmissionUI}
                           status="warning"
                         />
+                      </div>
+                    ) : outOfAttempts ? (
+                      <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
+                        <div className="flex items-start gap-2">
+                          <Info size={14} className="text-rose-500 shrink-0 mt-0.5" />
+                          <p className="text-xs text-rose-800 font-medium leading-snug">
+                            {t('assignments.rr_out_of_attempts', {
+                              defaultValue:
+                                "You've used all your attempts. Contact your instructor to request another.",
+                            })}
+                          </p>
+                        </div>
                       </div>
                     ) : (
                       <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
