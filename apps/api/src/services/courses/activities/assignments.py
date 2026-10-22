@@ -2183,6 +2183,7 @@ async def _regrade_graded_submissions(
                 overall_feedback=None,
                 auto_graded=True,
                 dispatch_webhook=False,
+                grade_source="regrade",  # Rescue Ready fork: instructor edit, not the student
             )
         except Exception:
             logger.exception(
@@ -2917,6 +2918,7 @@ async def delete_assignment_task_submission(
                     overall_feedback=None,
                     auto_graded=True,
                     dispatch_webhook=False,
+                    grade_source="regrade",  # Rescue Ready fork: instructor deleted an answer
                 )
                 await _reconcile_certificate_after_grade_change(
                     request, deleted_user_id, course, db_session
@@ -3833,6 +3835,7 @@ async def _apply_grade_and_finalize(
     dispatch_webhook: bool = True,
     assignment_tasks: Sequence[AssignmentTask] | None = None,
     request: Request | None = None,
+    grade_source: str | None = None,
 ) -> dict:
     """
     Core grading logic shared by manual and auto-grade flows. Computes the
@@ -3974,6 +3977,13 @@ async def _apply_grade_and_finalize(
     await db_session.commit()
     await db_session.refresh(assignment_user_submission)
 
+    # Rescue Ready fork: what caused this grade, for the record. ``auto_graded``
+    # stays the behaviour switch (it defers a grade whose CODE task can't be
+    # verified), which the bulk regrade after an instructor edit also needs; but
+    # recording it as "auto_graded" made instructor-caused regrades look like the
+    # student's own auto-grade. Callers pass grade_source="regrade" for those.
+    source = grade_source or ("auto_grade" if auto_graded else "manual_grade")
+
     # Durable audit row for the grade the STUDENT received. This is the single
     # grading choke point (both manual and auto paths), and retries reset the
     # live submission grade in place, so this permanent row is the only record
@@ -3993,7 +4003,8 @@ async def _apply_grade_and_finalize(
             "letter_grade": computed["letter_grade"],
             "passed": computed["passed"],
             "attempt_number": int(assignment_user_submission.attempt_number or 1),
-            "auto_graded": auto_graded,
+            "auto_graded": source == "auto_grade",
+            "grade_source": source,  # Rescue Ready fork: auto_grade / manual_grade / regrade
             # Rescue Ready fork: per-task score/correctness for this attempt.
             # The answers themselves sit on the matching ASSIGNMENT_SUBMITTED
             # row (same attempt_number); repeating them here would copy every
@@ -4009,7 +4020,7 @@ async def _apply_grade_and_finalize(
     await _rr_sync_assignment_completion(
         request, assignment, course, user_id, bool(computed["passed"]),
         int(assignment_user_submission.attempt_number or 1), db_session,
-        source="auto_grade" if auto_graded else "manual_grade",
+        source=source,
     )
 
     if dispatch_webhook:

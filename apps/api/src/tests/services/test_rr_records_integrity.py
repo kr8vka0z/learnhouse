@@ -9,6 +9,13 @@ from sqlmodel import select
 
 from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
 from src.services.audit.audit import record_audit_event
+from src.tests.services.test_rr_assignment_completion import (  # noqa: F401 (env is a fixture)
+    _assignment,
+    _attempt,
+    _audits,
+    _step,
+    env,
+)
 
 
 class _CM:
@@ -277,3 +284,31 @@ class TestUserDeleteKeepsRecords:
         with pytest.raises(HTTPException) as exc:
             await delete_user_by_id(mock_request, db, admin_user, admin_user.id)
         assert exc.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Regrades are recorded as regrades
+# ---------------------------------------------------------------------------
+
+
+class TestRegradeProvenance:
+    async def test_answer_key_change_is_recorded_as_regrade(
+        self, env, mock_request, db, org, course, chapter, activity, regular_user, admin_user,
+    ):
+        from src.db.courses.assignments import AssignmentTaskUpdate
+        from src.services.courses.activities.assignments import update_assignment_task
+
+        a = await _assignment(db, org, course, chapter, activity)
+        await _attempt(mock_request, db, a, regular_user, "5")  # auto-graded: fails
+
+        # The instructor fixes the answer key; the stored answer now passes.
+        await update_assignment_task(
+            mock_request, "assignmenttask_rr_completion",
+            AssignmentTaskUpdate(contents={"correct_answers": ["5"], "match_mode": "exact"}),
+            admin_user, db,
+        )
+        graded = _audits(env, UserAuditEventType.ASSIGNMENT_GRADED)
+        assert [g["metadata"]["grade_source"] for g in graded] == ["auto_grade", "regrade"]
+        assert graded[-1]["metadata"]["auto_graded"] is False
+        completed = _audits(env, UserAuditEventType.ACTIVITY_COMPLETED)
+        assert [c["metadata"]["completed_by"] for c in completed] == ["regrade"]
