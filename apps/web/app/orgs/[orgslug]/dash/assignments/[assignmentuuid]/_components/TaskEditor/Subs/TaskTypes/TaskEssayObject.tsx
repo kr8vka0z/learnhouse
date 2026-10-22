@@ -3,7 +3,7 @@
 //
 // Stored as a CUSTOM task with contents { kind: 'essay', prompt, min_words?,
 // max_words?, explanation? } so no new Postgres enum value is needed. The
-// server never auto-grades CUSTOM, enforces the word limits at hand-in
+// server never auto-grades CUSTOM, enforces the word limits and a size ceiling at hand-in
 // (services/courses/activities/essay.py) and strips `explanation` (the model
 // answer / rubric) from students until grading, revealing it only when the
 // assignment shows correct answers. Modelled on TaskShortAnswerObject.
@@ -29,7 +29,7 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { applyManualGrade } from './applyManualGrade'
-import { countWords, essayLimits, isEssayContents } from '@/lib/assignments/essay'
+import { countWords, ESSAY_MAX_JSON_CHARS, essayJsonLength, essayLimits, isEssayContents } from '@/lib/assignments/essay'
 
 type EssayContents = {
   kind: 'essay'
@@ -213,6 +213,12 @@ function TaskEssayObject({ view, assignmentTaskUUID, user_id, onGraded }: TaskEs
     // (deleting is always allowed). The minimum is shown live and enforced by
     // the server at hand-in, which explains the refusal.
     if (contents.max_words && countWords(next) > contents.max_words && countWords(next) > countWords(studentAnswer)) {
+      return
+    }
+    // Size ceiling, measured like the server (essayJsonLength): word limits
+    // alone don't bound size, and the server refuses anything over it.
+    if (essayJsonLength(next) > ESSAY_MAX_JSON_CHARS && next.length > studentAnswer.length) {
+      toast.error(t(k('too_long'), { defaultValue: 'Your answer has reached the maximum length.' }), { id: 'essay-too-long' })
       return
     }
     interactedRef.current = true

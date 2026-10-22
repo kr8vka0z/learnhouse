@@ -2,13 +2,26 @@
 // (apps/api/src/services/courses/activities/essay.py).
 import { describe, expect, test } from "bun:test";
 
-import { countWords, essayLimits, isEssayTask } from "../lib/assignments/essay.ts";
+import { countWords, essayJsonLength, essayLimits, isEssayTask } from "../lib/assignments/essay.ts";
 
 describe("countWords", () => {
   test("splits on any run of whitespace like Python str.split()", () => {
     expect(countWords("  one\ntwo   three\tfour ")).toBe(4);
     expect(countWords("")).toBe(0);
     expect(countWords("   \n ")).toBe(0);
+  });
+});
+
+describe("essayJsonLength", () => {
+  // Expected values are Python's len(json.dumps({"answer": s})).
+  test("matches the server's size measure, escaping included", () => {
+    expect(essayJsonLength("")).toBe(14);
+    expect(essayJsonLength("abc")).toBe(17);
+    expect(essayJsonLength('a"b\\c')).toBe(21);
+    expect(essayJsonLength("x\ny\tz")).toBe(21);
+    expect(essayJsonLength("é")).toBe(20);
+    expect(essayJsonLength("😀")).toBe(26);
+    expect(essayJsonLength("\x01\x7f")).toBe(26);
   });
 });
 

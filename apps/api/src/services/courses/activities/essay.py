@@ -13,6 +13,8 @@ The learner answer is ``task_submission = {"answer": "<plain text>"}``. CUSTOM
 tasks without ``kind == "essay"`` are untouched by everything here.
 """
 
+import json
+
 from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -26,7 +28,9 @@ from src.db.courses.assignments import (
 # Audit snapshot cap for essay answers, in characters of JSON. The default cap
 # (8000) would replace a long essay with a size marker, losing the one record
 # of what the student wrote on an attempt a retry later wipes. 100k characters
-# is roughly 15,000 words; the 2 MB submission cap still bounds the payload.
+# is roughly 15,000 words. It is also the hand-in size ceiling (see
+# check_essay_word_limits) and must match ESSAY_MAX_JSON_CHARS in
+# apps/web/lib/assignments/essay.ts.
 ESSAY_SNAPSHOT_MAX_CHARS = 100_000
 
 
@@ -96,6 +100,16 @@ async def check_essay_word_limits(
             raise HTTPException(
                 status_code=400,
                 detail=f"The answer to \"{task.title}\" must be plain text.",
+            )
+        # Size ceiling: word limits don't bound size (one long token is one
+        # word), and an answer over the snapshot cap would be replaced by a size
+        # marker in the audit record. Measured exactly as _rr_cap_answer does
+        # (JSON of the whole task_submission, ASCII-escaped) so anything
+        # accepted here is stored in full.
+        if ts and len(json.dumps(ts.task_submission, default=str)) > ESSAY_SNAPSHOT_MAX_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"\"{task.title}\" is too long to hand in. Please shorten it.",
             )
         words = count_words(answer)
         if lo is not None and words < lo:

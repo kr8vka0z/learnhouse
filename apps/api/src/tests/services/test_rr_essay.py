@@ -30,6 +30,7 @@ from src.services.courses.activities.assignments import (
     handle_assignment_task_submission,
     read_assignment_task,
 )
+from src.services.courses.activities.essay import ESSAY_SNAPSHOT_MAX_CHARS
 
 _A = "src.services.courses.activities.assignments."
 ESSAY_UUID = "assignmenttask_rr_essay"
@@ -180,6 +181,40 @@ class TestWordLimits:
         await _save(mock_request, db, regular_user, ESSAY_UUID, {"answer": "  one\ntwo   three four "})
         result = await create_assignment_submission(mock_request, a.assignment_uuid, regular_user, db)
         assert result.submission_status == AssignmentUserSubmissionStatus.SUBMITTED
+
+    async def test_hand_in_over_size_ceiling_is_refused(
+        self, env, mock_request, db, org, course, chapter, activity, regular_user,
+    ):
+        # One huge "word" passes max_words=1 but would be cut from the audit
+        # snapshot, so the size ceiling must refuse it.
+        a = await _assignment(db, org, course, chapter, activity, {**ESSAY, "max_words": 1})
+        await _save(mock_request, db, regular_user, ESSAY_UUID,
+                    {"answer": "x" * (ESSAY_SNAPSHOT_MAX_CHARS + 1)})
+        with pytest.raises(HTTPException) as exc:
+            await create_assignment_submission(mock_request, a.assignment_uuid, regular_user, db)
+        assert exc.value.status_code == 400
+        assert _submitted_audits(env) == []
+
+    async def test_answer_under_ceiling_survives_snapshot_uncut(
+        self, env, mock_request, db, org, course, chapter, activity, regular_user,
+    ):
+        # Non-ASCII text grows when JSON-escaped; the ceiling must measure the
+        # same way the snapshot cap does, or an accepted essay is still cut.
+        a = await _assignment(db, org, course, chapter, activity, ESSAY)
+        essay = "é" * (ESSAY_SNAPSHOT_MAX_CHARS // 6 - 10)
+        await _save(mock_request, db, regular_user, ESSAY_UUID, {"answer": essay})
+        await create_assignment_submission(mock_request, a.assignment_uuid, regular_user, db)
+        assert _submitted_audits(env)[0]["metadata"]["tasks"][0]["answer"] == {"answer": essay}
+
+    async def test_non_ascii_over_escaped_ceiling_is_refused(
+        self, env, mock_request, db, org, course, chapter, activity, regular_user,
+    ):
+        a = await _assignment(db, org, course, chapter, activity, ESSAY)
+        await _save(mock_request, db, regular_user, ESSAY_UUID,
+                    {"answer": "é" * (ESSAY_SNAPSHOT_MAX_CHARS // 6 + 10)})
+        with pytest.raises(HTTPException) as exc:
+            await create_assignment_submission(mock_request, a.assignment_uuid, regular_user, db)
+        assert exc.value.status_code == 400
 
     async def test_draft_save_over_limit_is_allowed(
         self, env, mock_request, db, org, course, chapter, activity, regular_user,
