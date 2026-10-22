@@ -6,6 +6,8 @@ import learnhouseIcon from 'public/learnhouse_bigicon_1.png'
 import { getOrgAuthBackgroundMediaDirectory } from '@services/media/media'
 import OrgSquareLogo from '@components/Objects/Org/OrgSquareLogo'
 import { getUriWithOrg } from '@services/config/config'
+// Rescue Ready fork: navy panel in white-label.
+import { RR_AUTH_PANEL_GRADIENT, RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface AuthMobileHeaderProps {
   org: any
@@ -26,7 +28,7 @@ export default function AuthMobileHeader({ org }: AuthMobileHeaderProps) {
   const getBackgroundStyle = (): React.CSSProperties => {
     if (background_type === 'gradient' || !background_image) {
       return {
-        background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+        background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
       }
     }
     if (background_type === 'custom' && background_image) {
@@ -44,7 +46,7 @@ export default function AuthMobileHeader({ org }: AuthMobileHeaderProps) {
       }
     }
     return {
-      background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+      background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
     }
   }
 

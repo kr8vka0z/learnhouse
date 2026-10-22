@@ -34,6 +34,19 @@ html:root {
   --font-default: var(--font-rr-body);
 }
 
+/* Auth pages (wrapped in .rr-auth by app/auth/layout.tsx in white-label):
+   their primary buttons are hard-coded bg-black. Navy fill, deep-navy hover;
+   white text is 14:1 and higher on both. Unlayered, so it beats the
+   utilities. Translucent bg-black/NN scrims are separate classes and stay. */
+.rr-auth .bg-black {
+  background-color: #0b1f5c;
+}
+.rr-auth .hover\:bg-black\/85:hover,
+.rr-auth .hover\:bg-black\/90:hover,
+.rr-auth .hover\:bg-gray-800:hover {
+  background-color: #00032e;
+}
+
 @layer base {
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-rr-heading), var(--font-default), sans-serif;

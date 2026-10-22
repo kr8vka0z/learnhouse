@@ -9,7 +9,7 @@ import { getUriWithOrg } from '@services/config/config'
 import { cn } from '@/lib/utils'
 import { usePlan } from '@components/Hooks/usePlan'
 // Rescue Ready fork: white-label switch.
-import { RR_WHITE_LABEL } from '@/lib/rr/branding'
+import { RR_AUTH_PANEL_GRADIENT, RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 interface AuthBrandingPanelProps {
   org: any
@@ -54,7 +54,7 @@ export default function AuthBrandingPanel({ org, welcomeText, title, subtitle }:
     if (background_type === 'gradient' || !background_image) {
       // Keep the original black gradient
       return {
-        background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+        background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
       }
     }
     if (background_type === 'custom' && background_image) {
@@ -72,7 +72,7 @@ export default function AuthBrandingPanel({ org, welcomeText, title, subtitle }:
       }
     }
     return {
-      background: 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)',
+      background: RR_WHITE_LABEL ? RR_AUTH_PANEL_GRADIENT : 'linear-gradient(041.61deg, #202020 7.15%, #000000 90.96%)', // Rescue Ready fork: navy in white-label
     }
   }
 

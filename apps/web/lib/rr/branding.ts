@@ -7,6 +7,11 @@
 
 export const RR_WHITE_LABEL = true
 
+// Sign-in panel background in white-label (upstream's is a black gradient set
+// inline, so CSS can't restyle it): primary navy to deep navy. White text on
+// either end is well above WCAG AA.
+export const RR_AUTH_PANEL_GRADIENT = 'linear-gradient(041.61deg, #0B1F5C 7.15%, #00032E 90.96%)'
+
 // AGPL-3.0 section 13: network users must be offered the corresponding source.
 export const DEFAULT_SOURCE_CODE_URL = 'https://github.com/kr8vka0z/learnhouse'
 

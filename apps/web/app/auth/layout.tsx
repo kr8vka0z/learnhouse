@@ -6,6 +6,7 @@ import { getAuthOrgSlug } from '@services/org/orgResolution'
 import type { Metadata } from 'next'
 import { getOrganizationContextInfo } from '@services/organizations/orgs'
 import { getOrgFaviconMediaDirectory } from '@services/media/media'
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 // Rescue Ready fork: the auth pages sit outside app/orgs/[orgslug], whose
 // layout sets the org favicon, so sign-in showed the default LearnHouse icon.
@@ -44,7 +45,10 @@ export default async function AuthLayout({
     return (
         <OrgProvider orgslug={orgslug}>
             <OrgLanguageSync />
-            {children}
+            {/* Rescue Ready fork: `rr-auth` lets rr-theme.css recolor the auth
+                pages' hard-coded black buttons; `contents` keeps the wrapper
+                out of layout. */}
+            {RR_WHITE_LABEL ? <div className="rr-auth contents">{children}</div> : children}
         </OrgProvider>
     )
 }
