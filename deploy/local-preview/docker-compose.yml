@@ -1,0 +1,109 @@
+# Local preview stack (Rescue Ready fork): the fork's own image built from this
+# checkout, plus Postgres (pgvector) and Redis. For clicking through the fork's
+# features on a throwaway database; not a production deployment.
+# Usage and reset steps: README.md next to this file.
+#
+# Secrets and the app port come from ./.env (create it with ./make-env.sh).
+# Every port is bound to 127.0.0.1, so nothing is reachable from the network.
+name: lh-preview
+
+services:
+  learnhouse-app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # OSS build: strips any ee/ folder from the web bundle.
+        LEARNHOUSE_PUBLIC: "true"
+    image: lh-preview-app:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      LEARNHOUSE_API_URL: http://localhost:9000
+      LEARNHOUSE_PORT: "9000"
+      LEARNHOUSE_DOMAIN: localhost:${HTTP_PORT:-3300}
+      # Without this the API reports the upstream default "localhost:3000" as
+      # the frontend domain and the web app stores it in LH_frontend_domain,
+      # so links and redirects point at the wrong port.
+      LEARNHOUSE_FRONTEND_DOMAIN: localhost:${HTTP_PORT:-3300}
+      # Single tenancy: cookies are host-only on localhost:<port>, so no
+      # LEARNHOUSE_COOKIE_DOMAIN is set (single mode ignores it and warns).
+      LEARNHOUSE_TENANCY: single
+      LEARNHOUSE_ALLOWED_ORIGINS: http://localhost:${HTTP_PORT:-3300}
+      LEARNHOUSE_SQL_CONNECTION_STRING: postgresql://learnhouse:${POSTGRES_PASSWORD}@db:5432/learnhouse
+      LEARNHOUSE_REDIS_CONNECTION_STRING: redis://redis:6379/learnhouse
+      LEARNHOUSE_REDIS_URL: redis://redis:6379
+      LEARNHOUSE_CONTENT_DELIVERY_TYPE: filesystem
+      LEARNHOUSE_DEVELOPMENT_MODE: "False"
+      LEARNHOUSE_LOGFIRE_ENABLED: "False"
+      LEARNHOUSE_IS_AI_ENABLED: "False"
+      NEXTAUTH_URL: http://localhost:${HTTP_PORT:-3300}
+      NEXT_PUBLIC_LEARNHOUSE_API_URL: http://localhost:${HTTP_PORT:-3300}/api/v1/
+      NEXT_PUBLIC_LEARNHOUSE_BACKEND_URL: http://localhost:${HTTP_PORT:-3300}/
+      NEXT_PUBLIC_LEARNHOUSE_DOMAIN: localhost:${HTTP_PORT:-3300}
+      NEXT_PUBLIC_LEARNHOUSE_TOP_DOMAIN: localhost
+      NEXT_PUBLIC_LEARNHOUSE_MULTI_ORG: "False"
+      NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LEARNHOUSE_INITIAL_ORG_SLUG:-sample-school}
+      NEXT_PUBLIC_LEARNHOUSE_HTTPS: "False"
+      NEXT_PUBLIC_COLLAB_URL: ws://localhost:${HTTP_PORT:-3300}/collab
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-3300}:80"
+    volumes:
+      - content:/app/api/content
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Server-side rendering inside the app container fetches the public API URL
+  # (localhost:<port>), but inside the container only nginx on :80 listens.
+  # This sidecar shares the app's network and forwards <port> to :80 (the
+  # same sidecar the upstream CLI generates for non-80 ports).
+  ssr-fwd:
+    image: alpine/socat:1.8.0.0
+    restart: unless-stopped
+    network_mode: "service:learnhouse-app"
+    command: TCP-LISTEN:${HTTP_PORT:-3300},fork,reuseaddr TCP:localhost:80
+    depends_on:
+      - learnhouse-app
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: learnhouse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: learnhouse
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnhouse"]
+      interval: 5s
+      timeout: 4s
+      retries: 5
+
+  redis:
+    image: redis:7.2.3-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 4s
+      retries: 5
+
+volumes:
+  db_data:
+  redis_data:
+  content:
