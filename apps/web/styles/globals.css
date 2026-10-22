@@ -4,6 +4,8 @@
 @plugin 'tailwindcss-animate';
 
 @import 'tailwindcss';
+/* Rescue Ready fork: the fork's color/type theme, kept in its own file. */
+@import './rr-theme.css';
 
 /* EE components (apps/web/ee) are gitignored, so automatic source detection
    skips them. Scan them explicitly. */

@@ -12,12 +12,17 @@ import React from 'react'
 import Link from 'next/link'
 import { useTranslation } from 'react-i18next'
 import { getPlatformUrl } from '@services/config/config'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 
 const TERMS_URL = getPlatformUrl('/terms') || 'https://www.learnhouse.io/terms'
 const PRIVACY_URL = getPlatformUrl('/privacy') || 'https://www.learnhouse.io/privacy'
 
 export function AuthFooter({ className = '' }: { className?: string }) {
   const { t } = useTranslation()
+  // Rescue Ready fork: these are LearnHouse's own terms; a self-hosted
+  // white-label site has no platform URL and must not bind users to them.
+  if (RR_WHITE_LABEL && !getPlatformUrl('/terms')) return null
   return (
     <div className={`pb-8 pt-6 text-center px-6 ${className}`}>
       <p className="text-[13px] text-black/30 font-medium">
@@ -56,6 +61,8 @@ export function CopyrightFooter({
   tone?: 'light' | 'dark'
 }) {
   const { t } = useTranslation()
+  // Rescue Ready fork: no "LearnHouse, Inc." copyright on a white-label site.
+  if (RR_WHITE_LABEL && !getPlatformUrl('/terms')) return null
   const base = tone === 'dark' ? 'text-white/40' : 'text-black/35'
   const link = tone === 'dark' ? 'text-white/60 hover:text-white/80' : 'text-black/55 hover:text-black/75'
   return (

@@ -1,6 +1,8 @@
 'use client'
 import { getPlatformUrl, getUriWithoutOrg } from '@services/config/config'
 import { signOut } from '@components/Contexts/AuthContext'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import { openFeedbackDialog, isReportingAvailable } from '@lib/errors/report'
 import type { ResolutionKind } from '@lib/errors/types'
 import {
@@ -138,6 +140,9 @@ export default function ErrorActions({ resolutions, reset, eventId, loginNext }:
                 label="Report this problem" icon={<MessageSquareWarning size={16} />} />
             )
           case 'contact_support':
+            // Rescue Ready fork: the fallback mails LearnHouse's own support,
+            // which can't help a white-label site's users; hide it instead.
+            if (RR_WHITE_LABEL && !getPlatformUrl('/contact')) return null
             return (
               <ActionButton key={kind} href={supportHref} variant="ghost" label="Contact support"
                 icon={<LifeBuoy size={16} />} />

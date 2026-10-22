@@ -2,6 +2,8 @@ import '../styles/globals.css'
 import React from 'react'
 import Providers from '@components/Providers'
 import { Wix_Madefor_Text, Tajawal } from 'next/font/google'
+// Rescue Ready fork: theme fonts.
+import { Inter, Sora } from 'next/font/google'
 
 const wixMadeforText = Wix_Madefor_Text({
   subsets: ['latin'],
@@ -28,6 +30,11 @@ const tajawal = Tajawal({
   variable: '--font-arabic',
 })
 
+// Rescue Ready fork: the fork's theme typefaces (Inter body, Sora headings),
+// self-hosted at build time like Wix Madefor above. Applied in rr-theme.css.
+const rrBody = Inter({ subsets: ['latin'], display: 'swap', variable: '--font-rr-body' })
+const rrHeading = Sora({ subsets: ['latin'], display: 'swap', variable: '--font-rr-heading' })
+
 export default function RootLayout({
   children,
 }: {
@@ -39,7 +46,8 @@ export default function RootLayout({
   // no-JS baseline for crawlers; the script overwrites it for everyone else.
   return (
     <html
-      className={`${wixMadeforText.variable} ${tajawal.variable}`}
+      // Rescue Ready fork: + theme font variables.
+      className={`${wixMadeforText.variable} ${tajawal.variable} ${rrBody.variable} ${rrHeading.variable}`}
       lang="en"
       suppressHydrationWarning
     >

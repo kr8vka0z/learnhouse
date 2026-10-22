@@ -38,7 +38,8 @@ export async function generateMetadata(props: MetadataProps): Promise<Metadata> 
   if (!course_meta || !activity) {
     return {
       title: `Activity | ${org?.name || 'LearnHouse'}`,
-      description: 'View this activity on LearnHouse',
+      // Rescue Ready fork: name the org, not the platform (white-label).
+      description: `View this activity on ${org?.name || 'LearnHouse'}`,
     }
   }
 

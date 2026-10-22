@@ -16,6 +16,9 @@ import { PageViewTracker } from '@components/Analytics/PageViewTracker'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { usePlan } from '@components/Hooks/usePlan'
 import { getGoogleFontUrl, DEFAULT_FONT } from '@/lib/fonts'
+// Rescue Ready fork: AGPL source-code link in the footer.
+import { resolveSourceCodeUrl } from '@/lib/rr/branding'
+import { getConfig } from '@services/config/config'
 
 // Helper to convert hex to rgba
 const hexToRgba = (hex: string, alpha: number): string => {
@@ -50,6 +53,15 @@ function OrgFooter() {
             />
           </Link>
         )}
+        {/* Rescue Ready fork: AGPL-3.0 s.13 source offer to network users. */}
+        <a
+          href={resolveSourceCodeUrl(getConfig('NEXT_PUBLIC_RR_SOURCE_URL'))}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-gray-600 underline-offset-2 hover:underline"
+        >
+          Source code
+        </a>
       </div>
     </footer>
   )

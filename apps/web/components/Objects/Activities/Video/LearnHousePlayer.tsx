@@ -7,6 +7,8 @@ import { I18nProvider } from '@videojs/react/i18n'
 import { HlsJsVideo } from '@videojs/react/media/hlsjs-video'
 import { usePlayer, Video, VideoPlayer, VideoSkin } from '@videojs/react/video'
 import { PauseIcon, PlayIcon } from '@videojs/react/icons'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import {
   buildChaptersVtt,
   buildThumbnailsVtt,
@@ -205,6 +207,8 @@ function CenterIndicator() {
 /** Icon-only LearnHouse mark, top-right; fades in and out with the controls. */
 function PlayerLogo() {
   const visible = usePlayer((s) => s.controlsVisible)
+  // Rescue Ready fork: no LearnHouse mark over student videos in white-label.
+  if (RR_WHITE_LABEL) return null
   return (
     <img
       src="/lrn.svg"

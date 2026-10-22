@@ -28,6 +28,8 @@ import {
   Code,
 } from '@phosphor-icons/react'
 import { DiscordIcon } from '@components/Objects/Icons/DiscordIcon'
+// Rescue Ready fork: white-label switch.
+import { RR_WHITE_LABEL } from '@/lib/rr/branding'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import React, { useState } from 'react'
@@ -99,12 +101,17 @@ function DashMobileMenu() {
             className="flex items-center justify-center px-2.5 py-2.5 rounded-full transition-all duration-200"
             aria-label={t('common.home')}
           >
+            {/* Rescue Ready fork: a plain home icon instead of the LearnHouse mark in white-label. */}
+            {RR_WHITE_LABEL ? (
+              <House size={18} weight="fill" className="text-white opacity-60 hover:opacity-90 transition-opacity" />
+            ) : (
             <img
               src="/lrn-dash.svg"
               alt="LearnHouse"
               className="h-[18px] w-[18px] opacity-60 hover:opacity-90 transition-opacity"
               style={{ filter: 'brightness(0) invert(1)' }}
             />
+            )}
           </Link>
           {/* Progressive reveal: more icons as viewport widens */}
           <PillLink href="/dash/courses" icon={<BookOpen size={18} weight="fill" />} active={isActive('/dash/courses')} className="hidden min-[340px]:flex" />
@@ -258,6 +265,8 @@ function DashMobileMenu() {
                   </div>
                 )}
 
+                {/* Rescue Ready fork: help links and feedback go to LearnHouse; hidden in white-label. */}
+                {!RR_WHITE_LABEL && (<>
                 <a href="https://docs.learnhouse.app" target="_blank" rel="noopener noreferrer"
                   className="flex items-center w-full rounded-lg px-2.5 py-2 gap-2.5 text-white/40 hover:text-white/80 hover:bg-white/[0.05] transition-all"
                 >
@@ -277,6 +286,7 @@ function DashMobileMenu() {
                   <ChatCircleDots size={15} weight="fill" />
                   <span className="text-sm font-medium">{t('common.help_menu.report_feedback')}</span>
                 </button>
+                </>)}
               </div>
 
               {/* User footer */}
