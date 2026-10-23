@@ -191,44 +191,6 @@ async def _enforce_password_signup_allowed(db_session: AsyncSession, org_id: int
     await enforce_login_auth_method(db_session, org_id, AUTH_METHOD_PASSWORD)
 
 
-# Rescue Ready fork: on a single-org deployment an org-less account is a way
-# into the one org. Anyone could pre-register a future student's address with
-# their own password (auto-verified outside SaaS); once staff invite that
-# address, the student lands in the pre-made account and the registrant keeps
-# password access to it. So the org-less route closes whenever an org is
-# invite-only, matching the org-scoped route's refusal.
-async def _rr_enforce_orgless_signup_allowed(
-    request: Request, db_session: AsyncSession, current_user
-) -> None:
-    from sqlmodel import select
-    from src.core.ee_hooks import is_multi_org_allowed
-    from src.db.organizations import Organization
-
-    # Multi-org: an org-less account is a platform account that still needs an
-    # invite to enter any invite-only org, so upstream behaviour stands.
-    if is_multi_org_allowed():
-        return
-    # Every org, not just the default: OSS should have one, and checking all of
-    # them costs nothing if a stray second row exists.
-    org_ids = (await db_session.execute(select(Organization.id))).scalars().all()
-    for org_id in org_ids:
-        try:
-            mechanism = await get_org_join_mechanism(
-                request, org_id, current_user, db_session
-            )
-        except HTTPException as exc:
-            # No config row: upstream's default signup_mode is "open", and the
-            # org-scoped route can't admit anyone to such an org either.
-            if exc.status_code == 404:
-                continue
-            raise
-        if mechanism == "inviteOnly":
-            raise HTTPException(
-                status_code=403,
-                detail="You need an invite to join this organization",
-            )
-
-
 @router.post(
     "/{org_id}",
     response_model=UserRead,
@@ -334,7 +296,7 @@ async def api_create_user_with_orgid_and_invite(
     responses={
         200: {"description": "User account created.", "model": UserRead},
         400: {"description": "Password fails validation, email already registered, or username taken"},
-        403: {"description": "Single-organization deployment whose organization is invite-only"},  # Rescue Ready fork: see _rr_enforce_orgless_signup_allowed
+        403: {"description": "Single-organization deployment whose organization is invite-only"},  # Rescue Ready fork: see services/users/rr_signup_gate.py
     },
 )
 async def api_create_user_without_org(
@@ -348,7 +310,11 @@ async def api_create_user_without_org(
     Create User
     """
     _enforce_signup_rate_limit(request)
-    await _rr_enforce_orgless_signup_allowed(request, db_session, current_user)  # Rescue Ready fork: see helper
+    # Rescue Ready fork: no org-less accounts on an invite-only single-org
+    # deployment (pre-registration takeover); see services/users/rr_signup_gate.py.
+    from src.services.users.rr_signup_gate import enforce_orgless_signup_allowed
+
+    await enforce_orgless_signup_allowed(request, db_session, current_user)
     return await create_user_without_org(request, db_session, current_user, user_object)
 
 
