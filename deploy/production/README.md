@@ -65,6 +65,31 @@ container needs outbound internet access.
    invite email's link uses the public host, and a public sign-up attempt
    (`POST /api/v1/users/<org_id>`) returns 403.
 
+## Branding
+
+The white-label code is always on in this fork (FORK.md); the rest is org
+settings, applied the same way `deploy/local-preview/seed.py` (`brand_org`)
+does, through the org-settings API as an admin (or the matching dashboard
+screens). Keep the image files in the data folder (for example `brand/`) so a
+rebuild or a move can re-apply them:
+
+```text
+PUT /api/v1/orgs/<id>/config/color?color=%23<hex>          menu bar color
+PUT /api/v1/orgs/<id>/config/watermark?watermark_enabled=false   no site badge, no email "Powered by"
+PUT /api/v1/orgs/<id>/config/email_sender_name?email_sender_name=<name>
+PUT /api/v1/orgs/<id>/config/ai?ai_enabled=false&copilot_enabled=false
+PUT /api/v1/orgs/<id>/config/<f>?<f>_enabled=false   for communities, folders (Library), podcasts, boards, playgrounds
+PUT /api/v1/orgs/<id>/logo          form field logo_file          (wide logo, top menu bar)
+PUT /api/v1/orgs/<id>/square_logo   form field square_logo_file   (sign-in panel, dashboard, emails)
+PUT /api/v1/orgs/<id>/thumbnail     form field thumbnail_file     (link previews; the square logo works)
+PUT /api/v1/orgs/<id>/favicon       form field favicon_file
+```
+
+Emails embed the square logo by absolute URL, built from
+`LEARNHOUSE_MEDIA_URL` (the compose file sets it to the public host). Check
+one invite email: the logo loads and there is no "Powered by" line.
+`NEXT_PUBLIC_RR_SOURCE_URL` (footer "Source code" link) defaults to this fork.
+
 ## Container hardening and egress
 
 The compose file already applies, to every service: `no-new-privileges`,

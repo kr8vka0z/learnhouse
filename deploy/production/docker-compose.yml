@@ -42,6 +42,10 @@ services:
       # the frontend domain and the web app builds links and redirects on it.
       LEARNHOUSE_FRONTEND_DOMAIN: ${LH_PUBLIC_HOST}
       LEARNHOUSE_ALLOWED_ORIGINS: https://${LH_PUBLIC_HOST}
+      # Base for absolute file URLs in emails (org logo). Without it the API
+      # guesses the hosted-service pattern https://api.<domain>, which doesn't
+      # exist here; /content is served on the public host itself.
+      LEARNHOUSE_MEDIA_URL: https://${LH_PUBLIC_HOST}
       # TLS ends at the proxy in front, so the app itself only sees http. SSL
       # makes generated links (invites, password resets) use https; the proxy
       # must send X-Forwarded-Proto: https for cookies to be marked Secure
@@ -72,6 +76,9 @@ services:
       NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LH_ORG_SLUG:?set LH_ORG_SLUG in .env}
       NEXT_PUBLIC_LEARNHOUSE_HTTPS: "true"
       NEXT_PUBLIC_COLLAB_URL: wss://${LH_PUBLIC_HOST}/collab
+      # AGPL source offer: the student footer's "Source code" link. Point it at
+      # the public repository this deployment is built from (FORK.md).
+      NEXT_PUBLIC_RR_SOURCE_URL: ${NEXT_PUBLIC_RR_SOURCE_URL:-https://github.com/kr8vka0z/learnhouse}
     # Loopback only: the proxy or tunnel on this machine is the one way in.
     # No ssr-fwd sidecar (unlike the local preview): server-side rendering
     # fetches the public https URL, which goes back out through the proxy.
