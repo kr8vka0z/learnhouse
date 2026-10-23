@@ -334,7 +334,7 @@ async def api_create_user_with_orgid_and_invite(
     responses={
         200: {"description": "User account created.", "model": UserRead},
         400: {"description": "Password fails validation, email already registered, or username taken"},
-        403: {"description": "Single-organization deployment whose organization is invite-only"},  # Rescue Ready fork
+        403: {"description": "Single-organization deployment whose organization is invite-only"},  # Rescue Ready fork: see _rr_enforce_orgless_signup_allowed
     },
 )
 async def api_create_user_without_org(
