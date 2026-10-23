@@ -233,6 +233,12 @@ async def signWithGoogle(
 
             return user
         else:
+            # Rescue Ready fork: a Google sign-in with no org must not mint a
+            # new account on an invite-only single-org deployment, same rule as
+            # POST /users/. Existing accounts (branch below) still sign in.
+            from src.services.users.rr_signup_gate import enforce_orgless_signup_allowed
+
+            await enforce_orgless_signup_allowed(request, db_session, current_user)
             user = await create_user_without_org(
                 request, db_session, current_user, user_object, is_oauth=True, signup_provider="google"
             )

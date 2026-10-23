@@ -296,6 +296,7 @@ async def api_create_user_with_orgid_and_invite(
     responses={
         200: {"description": "User account created.", "model": UserRead},
         400: {"description": "Password fails validation, email already registered, or username taken"},
+        403: {"description": "Single-organization deployment whose organization is invite-only"},  # Rescue Ready fork: see services/users/rr_signup_gate.py
     },
 )
 async def api_create_user_without_org(
@@ -309,6 +310,11 @@ async def api_create_user_without_org(
     Create User
     """
     _enforce_signup_rate_limit(request)
+    # Rescue Ready fork: no org-less accounts on an invite-only single-org
+    # deployment (pre-registration takeover); see services/users/rr_signup_gate.py.
+    from src.services.users.rr_signup_gate import enforce_orgless_signup_allowed
+
+    await enforce_orgless_signup_allowed(request, db_session, current_user)
     return await create_user_without_org(request, db_session, current_user, user_object)
 
 
