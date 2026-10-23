@@ -43,3 +43,37 @@ def test_watermark_off_drops_the_powered_by_footer():
 def test_default_still_carries_the_powered_by_footer():
     sent = _render_invitation(watermark=None)
     assert POWERED_BY_URL in sent["body"]
+
+
+def _render_invitation_from(inviter, watermark):
+    general = {"email_sender_name": "Sample School"}
+    if watermark is not None:
+        general["watermark"] = watermark
+    org = SimpleNamespace(name="Sample School", org_uuid="org_uuid", logo_image="")
+    cfg = SimpleNamespace(config={"customization": {"general": general}})
+    sent = {}
+    with patch("src.core.deployment_mode.get_deployment_mode", return_value="oss"), patch(
+        "src.services.email.utils.get_media_base_url", return_value="https://api.test"
+    ), patch.object(emails, "send_email", side_effect=lambda **kw: sent.update(kw)):
+        emails.send_invitation_email(
+            email="student@example.com",
+            org_name=org.name,
+            inviter_username=inviter,
+            signup_url="https://school.test/signup",
+            invite_code="ABC123",
+            **resolve_org_email_branding(org, cfg).as_kwargs(),
+        )
+    return sent
+
+
+def test_white_label_invitation_does_not_name_the_inviting_staff_member():
+    # A white-labeled org (watermark off) invites in its own name, not a staff member's.
+    sent = _render_invitation_from("zqstaffmember", watermark=False)
+    assert "zqstaffmember" not in sent["body"]
+    assert "zqstaffmember" not in sent["subject"]
+    assert "Sample School" in sent["body"]
+
+
+def test_branded_invitation_still_names_the_inviter():
+    sent = _render_invitation_from("zqstaffmember", watermark=None)
+    assert "zqstaffmember" in sent["body"]

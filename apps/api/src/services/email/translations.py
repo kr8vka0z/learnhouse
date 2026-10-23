@@ -1096,6 +1096,14 @@ from src.services.email.nudge_translations import NUDGE_TRANSLATIONS  # noqa: E4
 for _nudge_lang, _nudge_keys in NUDGE_TRANSLATIONS.items():
     EMAIL_TRANSLATIONS.setdefault(_nudge_lang, {}).update(_nudge_keys)
 
+# Rescue Ready fork: invitation lines in the organization's own voice, used
+# when the org is white-labeled (see send_invitation_email). English only;
+# other languages fall back to it through t().
+EMAIL_TRANSLATIONS[DEFAULT_LANGUAGE].update({
+    "rr_invitation.intro_org": "You've been invited to join <strong>{org_name}</strong>.",
+    "rr_invitation.footer_org": "This invitation was sent by {org_name}. If you weren't expecting this, you can safely ignore it.",
+})
+
 
 def normalize_language(lang: str | None) -> str:
     """Return a supported locale code, falling back to English."""
