@@ -618,6 +618,13 @@ def send_invitation_email(
 
     heading = t(lang, "invitation.heading")
     intro = t(lang, "invitation.intro", inviter=safe_inviter, org_name=safe_org_name)
+    footer_note = t(lang, "invitation.footer", inviter=safe_inviter)
+    # Rescue Ready fork: a white-labeled org (watermark off, the same switch
+    # that drops the "Powered by" line) invites in its own name, so the
+    # inviting staff member's username isn't shown to the invitee.
+    if not powered_by:
+        intro = t(lang, "rr_invitation.intro_org", org_name=safe_org_name)
+        footer_note = t(lang, "rr_invitation.footer_org", org_name=safe_org_name)
     cta = t(lang, "invitation.cta", org_name=safe_org_name)
 
     body_content = f"""
@@ -637,7 +644,7 @@ def send_invitation_email(
         body=_email_layout(
             title=heading,
             body_content=body_content,
-            footer_note=t(lang, "invitation.footer", inviter=safe_inviter),
+            footer_note=footer_note,
             logo_html=_brand_logo_html(logo_url, org_name),
             powered_by=powered_by,
             lang=lang,
