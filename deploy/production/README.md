@@ -49,7 +49,10 @@ container needs outbound internet access.
    docker compose exec -T db psql -U learnhouse -tAc 'select version_num from alembic_version'
    ```
    The second command must print a revision.
-5. **Close the door** in the admin dashboard, under Users settings:
+5. **Remove the first-boot lines:** delete the four `LEARNHOUSE_INITIAL_*`
+   lines from `.env` (keep `LH_ORG_SLUG`), then `docker compose up -d`. They
+   are only read when the database has no organization.
+6. **Close the door** in the admin dashboard, under Users settings:
    - *Signups & Invite Codes*: set Join method to **Closed** (invite only), then
      generate an invite code. In closed mode an emailed invite carries that
      code; without one the invitee can't register.
@@ -57,10 +60,67 @@ container needs outbound internet access.
      no Google client is configured) and turn off session sharing with the
      hosted service.
    - New courses: leave them non-public.
-6. **Check from outside:** the public URL answers 200, signing in sets cookies
+7. **Check from outside:** the public URL answers 200, signing in sets cookies
    marked `Secure`, `/api/v1/docs` returns 404 (development mode is off), an
    invite email's link uses the public host, and a public sign-up attempt
    (`POST /api/v1/users/<org_id>`) returns 403.
+
+## Branding
+
+The white-label code is always on in this fork (FORK.md); the rest is org
+settings, applied the same way `deploy/local-preview/seed.py` (`brand_org`)
+does, through the org-settings API as an admin (or the matching dashboard
+screens). Keep the image files in the data folder (for example `brand/`) so a
+rebuild or a move can re-apply them:
+
+```text
+PUT /api/v1/orgs/<id>/config/color?color=%23<hex>          menu bar color
+PUT /api/v1/orgs/<id>/config/watermark?watermark_enabled=false   no site badge, no email "Powered by"
+PUT /api/v1/orgs/<id>/config/email_sender_name?email_sender_name=<name>
+PUT /api/v1/orgs/<id>/config/ai?ai_enabled=false&copilot_enabled=false
+PUT /api/v1/orgs/<id>/config/<f>?<f>_enabled=false   for communities, folders (Library), podcasts, boards, playgrounds
+PUT /api/v1/orgs/<id>/logo          form field logo_file          (wide logo, top menu bar)
+PUT /api/v1/orgs/<id>/square_logo   form field square_logo_file   (sign-in panel, dashboard, emails)
+PUT /api/v1/orgs/<id>/thumbnail     form field thumbnail_file     (link previews; the square logo works)
+PUT /api/v1/orgs/<id>/favicon       form field favicon_file
+```
+
+Emails embed the square logo by absolute URL, built from
+`LEARNHOUSE_MEDIA_URL` (the compose file sets it to the public host). Check
+one invite email: the logo loads and there is no "Powered by" line.
+`NEXT_PUBLIC_RR_SOURCE_URL` (footer "Source code" link) defaults to this fork.
+
+## Container hardening and egress
+
+The compose file already applies, to every service: `no-new-privileges`,
+all Linux capabilities dropped with only the measured minimum added back, a
+memory limit (app 2 GB, db 1 GB, redis 256 MB), `pids_limit: 512`, and public
+DNS servers. The app still runs as root inside its image (upstream Dockerfile).
+
+The stack network has a fixed subnet (`LH_SUBNET`, default `172.30.30.0/24`)
+so the host firewall can keep the containers off your LAN, VPN and other
+Docker networks while leaving the internet open. With iptables:
+
+```sh
+SUBNET=172.30.30.0/24
+iptables -t mangle -N LH-EGRESS
+iptables -t mangle -A LH-EGRESS -d $SUBNET -j RETURN
+iptables -t mangle -A LH-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+for n in 100.64.0.0/10 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8 169.254.0.0/16; do
+  iptables -t mangle -A LH-EGRESS -d $n -j DROP
+done
+iptables -t mangle -I FORWARD 1 -s $SUBNET -j LH-EGRESS
+```
+
+Why `mangle FORWARD` and not only Docker's `DOCKER-USER` chain: some VPN
+clients (Tailscale, for one) insert their own `filter FORWARD` rules ahead of
+`DOCKER-USER` that accept anything leaving through the VPN interface, so a
+`DOCKER-USER`-only rule never sees that traffic. Re-apply the rules at boot
+and whenever Docker restarts (for example a oneshot systemd unit with
+`After=docker.service` and `PartOf=docker.service`). Traffic to the host's own
+addresses goes through `INPUT`; a default-deny host firewall covers that.
+Check from inside: `docker compose exec learnhouse-app nc -z -w 3 <lan-ip> 22`
+must fail while `curl https://<public-host>/api/v1/health` still answers.
 
 ## Backups
 
@@ -68,6 +128,17 @@ container needs outbound internet access.
 `pg_dump`, checked with `pg_restore -l`) and `content.tar.gz` (uploads), and
 deletes local copies older than `KEEP_DAYS` (default 7). Copy each new folder
 off the machine on a schedule; the script prints its path on the last line.
+
+**Encrypt them.** Make an `age` key pair once (`age-keygen`), keep the
+private key in your password manager only, and put the public key
+(`age1…`) in `backup-recipients.txt` in the data folder. `backup.sh` then
+encrypts both files (`db.dump.age`, `content.tar.gz.age`) and deletes the
+plain copies, so nothing readable leaves the machine and the server never
+holds the key that can read old backups. Decrypt before restoring:
+```sh
+age -d -i <(your-password-manager-read-command) -o db.dump db.dump.age
+age -d -i <(your-password-manager-read-command) -o content.tar.gz content.tar.gz.age
+```
 
 **Restore** (to a fresh stack or a scratch Postgres):
 ```sh

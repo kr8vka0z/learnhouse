@@ -10,6 +10,18 @@
 #   cd /srv/learnhouse && docker compose up -d
 name: lh-prod
 
+# Applied to every service: no privilege gain through setuid binaries, every
+# Linux capability dropped (each service adds back only what its entrypoint
+# needs), and a ceiling on processes. Public DNS servers, because a host
+# firewall may block the containers from the LAN, where the host's own
+# resolver usually lives (Docker's DNS forwards from inside the container).
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  pids_limit: 512
+  dns: [1.1.1.1, 9.9.9.9]
+
 services:
   learnhouse-app:
     # Built from this repository and tagged per commit (see README). Changing
@@ -30,6 +42,10 @@ services:
       # the frontend domain and the web app builds links and redirects on it.
       LEARNHOUSE_FRONTEND_DOMAIN: ${LH_PUBLIC_HOST}
       LEARNHOUSE_ALLOWED_ORIGINS: https://${LH_PUBLIC_HOST}
+      # Base for absolute file URLs in emails (org logo). Without it the API
+      # guesses the hosted-service pattern https://api.<domain>, which doesn't
+      # exist here; /content is served on the public host itself.
+      LEARNHOUSE_MEDIA_URL: https://${LH_PUBLIC_HOST}
       # TLS ends at the proxy in front, so the app itself only sees http. SSL
       # makes generated links (invites, password resets) use https; the proxy
       # must send X-Forwarded-Proto: https for cookies to be marked Secure
@@ -55,10 +71,14 @@ services:
       NEXT_PUBLIC_LEARNHOUSE_DOMAIN: ${LH_PUBLIC_HOST}
       NEXT_PUBLIC_LEARNHOUSE_TOP_DOMAIN: ${LH_TOP_DOMAIN:?set LH_TOP_DOMAIN in .env}
       NEXT_PUBLIC_LEARNHOUSE_MULTI_ORG: "False"
-      # Must equal the org slug created on first boot.
-      NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LEARNHOUSE_INITIAL_ORG_SLUG:?set LEARNHOUSE_INITIAL_ORG_SLUG in .env}
+      # Must equal the org slug created on first boot. A separate variable so
+      # the LEARNHOUSE_INITIAL_* lines can be deleted from .env after it.
+      NEXT_PUBLIC_LEARNHOUSE_DEFAULT_ORG: ${LH_ORG_SLUG:?set LH_ORG_SLUG in .env}
       NEXT_PUBLIC_LEARNHOUSE_HTTPS: "true"
       NEXT_PUBLIC_COLLAB_URL: wss://${LH_PUBLIC_HOST}/collab
+      # AGPL source offer: the student footer's "Source code" link. Point it at
+      # the public repository this deployment is built from (FORK.md).
+      NEXT_PUBLIC_RR_SOURCE_URL: ${NEXT_PUBLIC_RR_SOURCE_URL:-https://github.com/kr8vka0z/learnhouse}
     # Loopback only: the proxy or tunnel on this machine is the one way in.
     # No ssr-fwd sidecar (unlike the local preview): server-side rendering
     # fetches the public https URL, which goes back out through the proxy.
@@ -66,6 +86,12 @@ services:
       - "127.0.0.1:${LH_HTTP_PORT:-3330}:80"
     volumes:
       - ./content:/app/api/content
+    <<: *hardening
+    # Runs as root inside (upstream image). Measured minimum: nginx chowns its
+    # temp dirs and drops workers to the nginx user (CHOWN, SETUID, SETGID);
+    # root reads and writes files owned by the image users (DAC_OVERRIDE).
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    mem_limit: 2g
     depends_on:
       db:
         condition: service_healthy
@@ -88,6 +114,11 @@ services:
       POSTGRES_DB: learnhouse
     volumes:
       - ./db:/var/lib/postgresql/data
+    <<: *hardening
+    # Measured minimum: the entrypoint walks, chmods and chowns the data
+    # folder as root, then switches to the postgres user.
+    cap_add: [CHOWN, DAC_READ_SEARCH, FOWNER, SETUID, SETGID]
+    mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U learnhouse"]
       interval: 5s
@@ -101,8 +132,21 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - ./redis:/data
+    <<: *hardening
+    # The entrypoint walks /data (owned by redis) to fix ownership, then
+    # switches to the redis user.
+    cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 4s
       retries: 5
+
+networks:
+  default:
+    # A fixed subnet, so a host firewall can single these containers out
+    # (for example: no traffic to private ranges except this subnet).
+    ipam:
+      config:
+        - subnet: ${LH_SUBNET:-172.30.30.0/24}
