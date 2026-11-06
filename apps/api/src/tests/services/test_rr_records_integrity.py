@@ -1,6 +1,6 @@
 """Rescue Ready fork: the student record (audit log + completion data) is complete
 and survives. Covers the audit writer's retry, LOGIN on every sign-in path,
-COURSE_ENROLLED on admin enrollment, the user- and org-delete guards, one completion per
+COURSE_ENROLLED on admin enrollment, the user-, org- and course-delete guards, one completion per
 pass under concurrent grading, regrade provenance, and the mark-done rules.
 """
 
@@ -385,6 +385,186 @@ class TestOrgDeleteKeepsRecords:
         assert exc.value.status_code == 409
         assert (await db.execute(select(Organization).where(Organization.id == org_id))).scalars().first()
         assert await _audit_rows(db, regular_user.id, UserAuditEventType.ACTIVITY_COMPLETED)
+
+
+@pytest.fixture
+def course_delete_side_effects():
+    """Stub storage cleanup and the usage counter (Redis); yields the storage
+    mock so a refused delete can prove no content files were removed."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    storage = MagicMock()
+    with patch("src.services.courses.transfer.storage_utils.delete_storage_directory", storage), \
+         patch("src.services.courses.courses.decrease_feature_usage", new_callable=AsyncMock), \
+         patch("src.security.features_utils.usage.decrease_feature_usage", new_callable=AsyncMock), \
+         patch("src.services.courses.courses.dispatch_webhooks", new_callable=AsyncMock), \
+         patch("src.services.courses.courses.check_resource_access", new_callable=AsyncMock):
+        yield storage
+
+
+async def _second_course(db, org):
+    # A course with no student records, beside the fixture course.
+    from datetime import datetime
+
+    from src.db.courses.courses import Course
+
+    c = Course(
+        id=2, name="Empty Course", description="", public=True, published=True,
+        open_to_contributors=False, org_id=org.id, course_uuid="course_empty",
+        creation_date=str(datetime.now()), update_date=str(datetime.now()),
+    )
+    db.add(c)
+    await db.commit()
+    return c
+
+
+class TestCourseDeleteKeepsRecords:
+    async def test_course_with_student_records_cannot_be_deleted(
+        self, delete_rbac, audit_to_test_db, course_delete_side_effects, db, mock_request, admin_user, regular_user,
+        course, activity,
+    ):
+        # The course row cascades to its trail runs, steps, submissions and
+        # certificates; deleting it must be refused and touch nothing.
+        from fastapi import HTTPException
+
+        from src.db.courses.courses import Course
+        from src.db.trail_runs import TrailRun
+        from src.services.courses.courses import delete_course
+        from src.services.trail.trail import add_activity_to_trail
+
+        course_id = course.id
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_course(mock_request, course.course_uuid, admin_user, db)
+        assert exc.value.status_code == 409
+        course_delete_side_effects.assert_not_called()
+        assert (await db.execute(select(Course).where(Course.id == course_id))).scalars().first()
+        assert (await db.execute(select(TrailRun).where(TrailRun.course_id == course_id))).scalars().first()
+
+    async def test_course_without_records_is_deleted_even_if_a_sibling_has_some(
+        self, delete_rbac, audit_to_test_db, course_delete_side_effects, db, mock_request, org, admin_user,
+        regular_user, activity,
+    ):
+        from src.db.courses.courses import Course
+        from src.services.courses.courses import delete_course
+        from src.services.trail.trail import add_activity_to_trail
+
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+        empty = await _second_course(db, org)
+        empty_id = empty.id
+
+        await delete_course(mock_request, "course_empty", admin_user, db)
+        assert (await db.execute(select(Course).where(Course.id == empty_id))).scalars().first() is None
+
+    async def test_submission_kept_after_unenroll_blocks_delete(
+        self, env, delete_rbac, audit_to_test_db, course_delete_side_effects, db, mock_request,  # noqa: F811
+        admin_user, regular_user, org, course, chapter, activity,
+    ):
+        # Unenrolling drops the trail run and steps but keeps the submissions
+        # (as does a token submit-on-behalf, which skips enrollment), so a
+        # submission alone must still block the delete.
+        from fastapi import HTTPException
+
+        from src.db.trail_runs import TrailRun
+        from src.services.courses.courses import delete_course
+        from src.services.trail.trail import remove_course_from_trail
+
+        course_id, course_uuid = course.id, course.course_uuid
+        a = await _assignment(db, org, course, chapter, activity)
+        await _attempt(mock_request, db, a, regular_user, "4")
+        await remove_course_from_trail(mock_request, regular_user, course_uuid, db)
+        assert not (await db.execute(select(TrailRun).where(TrailRun.course_id == course_id))).first()
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_course(mock_request, course_uuid, admin_user, db)
+        assert exc.value.status_code == 409
+
+    async def test_certificate_alone_blocks_delete_but_not_a_sibling(
+        self, audit_to_test_db, course_delete_side_effects, db, mock_request, org, admin_user,
+        regular_user, course,
+    ):
+        # A certificate survives unenrolling with no trail run or submission.
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from src.db.courses.certifications import CertificateUser, Certifications
+        from src.db.courses.courses import Course
+        from src.services.courses.certifications import create_certificate_user
+        from src.services.courses.courses import delete_course
+
+        course_id = course.id
+        cert = Certifications(course_id=course_id, config={}, certification_uuid="certification_x")
+        db.add(cert)
+        await db.commit()
+        with patch("src.services.courses.certifications.check_resource_access", new_callable=AsyncMock), \
+             patch("src.services.courses.certifications.track", new_callable=AsyncMock), \
+             patch("src.services.courses.certifications.dispatch_webhooks", new_callable=AsyncMock):
+            await create_certificate_user(mock_request, regular_user.id, cert.id, db, current_user=admin_user)
+        empty_id = (await _second_course(db, org)).id
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_course(mock_request, "course_test", admin_user, db)
+        assert exc.value.status_code == 409
+        course_delete_side_effects.assert_not_called()
+        assert (await db.execute(select(Course).where(Course.id == course_id))).scalars().first()
+        assert (await db.execute(select(CertificateUser))).scalars().first()
+
+        await delete_course(mock_request, "course_empty", admin_user, db)
+        assert (await db.execute(select(Course).where(Course.id == empty_id))).scalars().first() is None
+
+    async def test_guard_locks_record_parents_before_checking(self, db, course, monkeypatch):
+        # SQLite can't show a concurrent insert waiting, so check the order:
+        # the course, assignment and certification rows (every record's FK
+        # parent) are selected FOR UPDATE before any record table is read.
+        from src.services.audit.record_retention import (
+            ensure_course_deletion_keeps_records,
+        )
+
+        seen = []
+        real_execute = db.execute
+
+        async def spy(stmt, *a, **kw):
+            seen.append((stmt.get_final_froms()[0].name, stmt._for_update_arg is not None))
+            return await real_execute(stmt, *a, **kw)
+
+        monkeypatch.setattr(db, "execute", spy)
+        await ensure_course_deletion_keeps_records(db, course.id)
+        assert seen[:3] == [("course", True), ("assignment", True), ("certifications", True)]
+        assert all(not locked for _, locked in seen[3:]) and len(seen) > 3
+
+
+class TestOrgContentWipeKeepsRecords:
+    async def test_wipe_refused_while_any_course_has_records(
+        self, delete_rbac, audit_to_test_db, course_delete_side_effects, db, mock_request, org, admin_user,
+        regular_user, course, activity,
+    ):
+        # All-or-nothing: an empty course in the same org is not wiped either.
+        from fastapi import HTTPException
+
+        from src.db.courses.courses import Course
+        from src.services.orgs.orgs import wipe_org_content
+        from src.services.trail.trail import add_activity_to_trail
+
+        await _second_course(db, org)
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+
+        with pytest.raises(HTTPException) as exc:
+            await wipe_org_content(mock_request, org.id, admin_user, db)
+        assert exc.value.status_code == 409
+        course_delete_side_effects.assert_not_called()
+        ids = (await db.execute(select(Course.id).where(Course.org_id == org.id))).scalars().all()
+        assert sorted(ids) == [1, 2]
+
+    async def test_wipe_allowed_when_no_course_has_records(
+        self, course_delete_side_effects, db, mock_request, org, admin_user, course,
+    ):
+        from src.services.orgs.orgs import wipe_org_content
+
+        await _second_course(db, org)
+        result = await wipe_org_content(mock_request, org.id, admin_user, db)
+        assert result["deleted_courses"] == 2
 
 
 # ---------------------------------------------------------------------------

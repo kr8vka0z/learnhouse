@@ -1076,6 +1076,13 @@ async def delete_course(
     # RBAC check
     await check_resource_access(request, db_session, current_user, course.course_uuid, AccessAction.DELETE)
 
+    # Rescue Ready fork: the record tables cascade on course delete, so deleting
+    # a course with student records would erase their official completion
+    # record. Checked before the storage cleanup so a refusal touches nothing.
+    from src.services.audit.record_retention import ensure_course_deletion_keeps_records
+
+    await ensure_course_deletion_keeps_records(db_session, course.id)
+
     # Clean up content files from storage
     org_statement = select(Organization).where(Organization.id == course.org_id)
     org = (await db_session.execute(org_statement)).scalars().first()

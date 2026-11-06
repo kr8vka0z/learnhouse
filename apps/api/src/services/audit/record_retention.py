@@ -1,12 +1,15 @@
 """Rescue Ready fork: keep a student's official record from being erased by an
-account or organization deletion.
+account, organization or course deletion.
 
 ``user_audit_event``, ``trailrun``, ``trailstep``, ``assignmentusersubmission``
 and ``certificateuser`` all reference ``user.id`` (and most ``organization.id``)
 with ``ON DELETE CASCADE``, so a hard delete of the user, or of an org, silently
-wipes the completion record. Rather than change those foreign keys (a migration
-against upstream's schema), the hard-delete paths (account and org) refuse
-while records exist. Removing someone from the organization (membership only, nothing
+wipes the completion record. The course-level ones cascade from ``course.id``
+too (submissions and certificates through their assignment/certification), so
+deleting a course, or wiping all of an org's courses, does the same. Rather
+than change those foreign keys (a migration against upstream's schema), the
+hard-delete paths (account, org, course, org content wipe) refuse while
+records exist. Removing someone from the organization (membership only, nothing
 cascades) and anonymizing them (admin API; keeps the rows, scrubs the PII) stay
 available.
 
@@ -19,8 +22,9 @@ from fastapi import HTTPException
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from src.db.courses.assignments import AssignmentUserSubmission
-from src.db.courses.certifications import CertificateUser
+from src.db.courses.assignments import Assignment, AssignmentUserSubmission
+from src.db.courses.certifications import CertificateUser, Certifications
+from src.db.courses.courses import Course
 from src.db.trail_runs import TrailRun
 from src.db.trail_steps import TrailStep
 from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
@@ -52,6 +56,46 @@ async def org_has_records(db_session: AsyncSession, org_id: int) -> bool:
         if await _any(db_session, table, table.org_id == org_id):
             return True
     return False
+
+
+async def course_has_records(db_session: AsyncSession, course_id: int) -> bool:
+    # Submissions and certificates are checked on their own: a token
+    # submit-on-behalf skips enrollment, and unenrolling drops the trail run but
+    # keeps the submissions, so a course can hold records with no trail run.
+    conditions = (
+        (TrailRun, TrailRun.course_id == course_id),
+        (TrailStep, TrailStep.course_id == course_id),
+        (AssignmentUserSubmission, AssignmentUserSubmission.assignment_id.in_(  # type: ignore[attr-defined]
+            select(Assignment.id).where(Assignment.course_id == course_id))),
+        (CertificateUser, CertificateUser.certification_id.in_(  # type: ignore[attr-defined]
+            select(Certifications.id).where(Certifications.course_id == course_id))),
+    )
+    for table, condition in conditions:
+        if await _any(db_session, table, condition):
+            return True
+    return False
+
+
+async def ensure_course_deletion_keeps_records(db_session: AsyncSession, course_id: int) -> None:
+    """Raise 409 if deleting the course would cascade away student records.
+
+    Locks the course and its assignment and certification rows first (held
+    until the caller's commit or rollback): every record row references one of
+    them, and a Postgres foreign-key insert waits on a FOR UPDATE lock of its
+    parent, so no record can land between this check and the delete. SQLite
+    (tests) ignores FOR UPDATE.
+    """
+    for table, column in ((Course, Course.id), (Assignment, Assignment.course_id),
+                          (Certifications, Certifications.course_id)):
+        await db_session.execute(select(table.id).where(column == course_id).with_for_update())
+    if await course_has_records(db_session, course_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This course has student enrollment or completion records, which are kept "
+                "as the official record, so it can't be deleted. Unpublish the course instead."
+            ),
+        )
 
 
 async def ensure_user_deletion_keeps_records(db_session: AsyncSession, user_id: int) -> None:
