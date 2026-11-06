@@ -942,6 +942,13 @@ async def wipe_org_content(
         select(Course).where(Course.org_id == org_id)
     )).scalars().all()
 
+    # Rescue Ready fork: each course delete cascades its student records, so
+    # refuse the whole wipe (before any files go) if any course has them.
+    from src.services.audit.record_retention import ensure_course_deletion_keeps_records
+
+    for course in courses:
+        await ensure_course_deletion_keeps_records(db_session, course.id)
+
     user_id = current_user.id if hasattr(current_user, "id") else "unknown"
     logging.warning(
         f"AUDIT: Organization content wipe - org_id={org_id}, org_uuid={org.org_uuid}, "
