@@ -56,7 +56,7 @@ async function buildPdf(dossiers: any[]) {
     // than one page (a long essay answer) used to run off the bottom and be lost.
     const lineHeight = size * 0.45
     const perPage = Math.max(1, Math.floor((pageHeight - margin * 2) / lineHeight) - 1)
-    for (let i = 0; i < wrapped.length || i === 0; i += perPage) {
+    for (let i = 0; i < wrapped.length; i += perPage) {
       const chunk = wrapped.slice(i, i + perPage)
       // Measure before deciding on the page break: checking only the current y let a
       // wrapped paragraph start near the bottom and run off the page.

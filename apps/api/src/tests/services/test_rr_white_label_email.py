@@ -12,7 +12,7 @@ import src.services.users.emails as emails
 from src.services.email.branding import POWERED_BY_URL, resolve_org_email_branding
 
 
-def _render_invitation(watermark):
+def _render_invitation(watermark, inviter="admin"):
     general = {"color": "#0B1F5C", "email_sender_name": "Sample School"}
     if watermark is not None:
         general["watermark"] = watermark
@@ -26,7 +26,7 @@ def _render_invitation(watermark):
         emails.send_invitation_email(
             email="student@example.com",
             org_name=org.name,
-            inviter_username="admin",
+            inviter_username=inviter,
             signup_url="https://school.test/signup",
             invite_code="ABC123",
             **branding.as_kwargs(),
@@ -45,35 +45,14 @@ def test_default_still_carries_the_powered_by_footer():
     assert POWERED_BY_URL in sent["body"]
 
 
-def _render_invitation_from(inviter, watermark):
-    general = {"email_sender_name": "Sample School"}
-    if watermark is not None:
-        general["watermark"] = watermark
-    org = SimpleNamespace(name="Sample School", org_uuid="org_uuid", logo_image="")
-    cfg = SimpleNamespace(config={"customization": {"general": general}})
-    sent = {}
-    with patch("src.core.deployment_mode.get_deployment_mode", return_value="oss"), patch(
-        "src.services.email.utils.get_media_base_url", return_value="https://api.test"
-    ), patch.object(emails, "send_email", side_effect=lambda **kw: sent.update(kw)):
-        emails.send_invitation_email(
-            email="student@example.com",
-            org_name=org.name,
-            inviter_username=inviter,
-            signup_url="https://school.test/signup",
-            invite_code="ABC123",
-            **resolve_org_email_branding(org, cfg).as_kwargs(),
-        )
-    return sent
-
-
 def test_white_label_invitation_does_not_name_the_inviting_staff_member():
     # A white-labeled org (watermark off) invites in its own name, not a staff member's.
-    sent = _render_invitation_from("zqstaffmember", watermark=False)
+    sent = _render_invitation(watermark=False, inviter="zqstaffmember")
     assert "zqstaffmember" not in sent["body"]
     assert "zqstaffmember" not in sent["subject"]
     assert "Sample School" in sent["body"]
 
 
 def test_branded_invitation_still_names_the_inviter():
-    sent = _render_invitation_from("zqstaffmember", watermark=None)
+    sent = _render_invitation(watermark=None, inviter="zqstaffmember")
     assert "zqstaffmember" in sent["body"]

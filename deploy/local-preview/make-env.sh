@@ -21,7 +21,7 @@ while IFS= read -r line; do
   case "$line" in
     HTTP_PORT=*) echo "HTTP_PORT=$port" ;;
     COMPOSE_PROJECT_NAME=*) echo "COMPOSE_PROJECT_NAME=$project" ;;
-    # Passwords get a fixed prefix so they always contain a letter, digit and symbol.
+    # Passwords get a fixed prefix so they always contain an upper- and lower-case letter and a symbol.
     *PASSWORD=) echo "${line}Pv-$(rand)" ;;
     [A-Z]*=) echo "${line}$(rand)" ;;
     *) echo "$line" ;;

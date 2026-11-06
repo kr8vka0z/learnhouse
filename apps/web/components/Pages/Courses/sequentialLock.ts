@@ -31,10 +31,6 @@ export function sequentialUnlockPath(item: any, courseid: string): string | null
   return `/course/${courseid}/activity/${String(next).replace('activity_', '')}`
 }
 
-export function isSequentialCourse(course: any): boolean {
-  return course?.extra_metadata?.[SEQUENTIAL_SETTING_KEY] === true
-}
-
 /** True when the course tree this student holds still has sequential locks. */
 export function courseHasSequentialLocks(course: any): boolean {
   return (course?.chapters ?? []).some((chapter: any) => isSequentialLocked(chapter))

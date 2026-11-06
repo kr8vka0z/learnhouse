@@ -40,7 +40,6 @@ class TestAuditWriter:
             return _CM(db)
 
         monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
-        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
         await record_audit_event(
             event_type=UserAuditEventType.LOGIN, user_id=regular_user.id, org_id=org.id,
             metadata={"method": "password"},
@@ -55,7 +54,6 @@ class TestAuditWriter:
             raise ConnectionError("db down")
 
         monkeypatch.setattr("src.core.events.database._async_session_factory", factory)
-        monkeypatch.setattr("src.services.audit.audit._RETRY_DELAY_SECONDS", 0)
         essay = "my private essay " * 10_000
         await record_audit_event(  # never raises
             event_type=UserAuditEventType.ASSIGNMENT_SUBMITTED, user_id=regular_user.id,
