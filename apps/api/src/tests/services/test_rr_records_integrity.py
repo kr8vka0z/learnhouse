@@ -480,6 +480,60 @@ class TestCourseDeleteKeepsRecords:
             await delete_course(mock_request, course_uuid, admin_user, db)
         assert exc.value.status_code == 409
 
+    async def test_certificate_alone_blocks_delete_but_not_a_sibling(
+        self, audit_to_test_db, course_delete_side_effects, db, mock_request, org, admin_user,
+        regular_user, course,
+    ):
+        # A certificate survives unenrolling with no trail run or submission.
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from src.db.courses.certifications import CertificateUser, Certifications
+        from src.db.courses.courses import Course
+        from src.services.courses.certifications import create_certificate_user
+        from src.services.courses.courses import delete_course
+
+        course_id = course.id
+        cert = Certifications(course_id=course_id, config={}, certification_uuid="certification_x")
+        db.add(cert)
+        await db.commit()
+        with patch("src.services.courses.certifications.check_resource_access", new_callable=AsyncMock), \
+             patch("src.services.courses.certifications.track", new_callable=AsyncMock), \
+             patch("src.services.courses.certifications.dispatch_webhooks", new_callable=AsyncMock):
+            await create_certificate_user(mock_request, regular_user.id, cert.id, db, current_user=admin_user)
+        empty_id = (await _second_course(db, org)).id
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_course(mock_request, "course_test", admin_user, db)
+        assert exc.value.status_code == 409
+        course_delete_side_effects.assert_not_called()
+        assert (await db.execute(select(Course).where(Course.id == course_id))).scalars().first()
+        assert (await db.execute(select(CertificateUser))).scalars().first()
+
+        await delete_course(mock_request, "course_empty", admin_user, db)
+        assert (await db.execute(select(Course).where(Course.id == empty_id))).scalars().first() is None
+
+    async def test_guard_locks_record_parents_before_checking(self, db, course, monkeypatch):
+        # SQLite can't show a concurrent insert waiting, so check the order:
+        # the course, assignment and certification rows (every record's FK
+        # parent) are selected FOR UPDATE before any record table is read.
+        from src.services.audit.record_retention import (
+            ensure_course_deletion_keeps_records,
+        )
+
+        seen = []
+        real_execute = db.execute
+
+        async def spy(stmt, *a, **kw):
+            seen.append((stmt.get_final_froms()[0].name, stmt._for_update_arg is not None))
+            return await real_execute(stmt, *a, **kw)
+
+        monkeypatch.setattr(db, "execute", spy)
+        await ensure_course_deletion_keeps_records(db, course.id)
+        assert seen[:3] == [("course", True), ("assignment", True), ("certifications", True)]
+        assert all(not locked for _, locked in seen[3:]) and len(seen) > 3
+
 
 class TestOrgContentWipeKeepsRecords:
     async def test_wipe_refused_while_any_course_has_records(

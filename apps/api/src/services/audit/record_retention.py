@@ -24,6 +24,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from src.db.courses.assignments import Assignment, AssignmentUserSubmission
 from src.db.courses.certifications import CertificateUser, Certifications
+from src.db.courses.courses import Course
 from src.db.trail_runs import TrailRun
 from src.db.trail_steps import TrailStep
 from src.db.user_audit_events import UserAuditEvent, UserAuditEventType
@@ -76,7 +77,17 @@ async def course_has_records(db_session: AsyncSession, course_id: int) -> bool:
 
 
 async def ensure_course_deletion_keeps_records(db_session: AsyncSession, course_id: int) -> None:
-    """Raise 409 if deleting the course would cascade away student records."""
+    """Raise 409 if deleting the course would cascade away student records.
+
+    Locks the course and its assignment and certification rows first (held
+    until the caller's commit or rollback): every record row references one of
+    them, and a Postgres foreign-key insert waits on a FOR UPDATE lock of its
+    parent, so no record can land between this check and the delete. SQLite
+    (tests) ignores FOR UPDATE.
+    """
+    for table, column in ((Course, Course.id), (Assignment, Assignment.course_id),
+                          (Certifications, Certifications.course_id)):
+        await db_session.execute(select(table.id).where(column == course_id).with_for_update())
     if await course_has_records(db_session, course_id):
         raise HTTPException(
             status_code=409,
