@@ -1,6 +1,6 @@
 """Rescue Ready fork: the student record (audit log + completion data) is complete
 and survives. Covers the audit writer's retry, LOGIN on every sign-in path,
-COURSE_ENROLLED on admin enrollment, the user-delete guard, one completion per
+COURSE_ENROLLED on admin enrollment, the user- and org-delete guards, one completion per
 pass under concurrent grading, regrade provenance, and the mark-done rules.
 """
 
@@ -363,6 +363,28 @@ class TestUserDeleteKeepsRecords:
         await delete_user_by_id(mock_request, db, admin_user, admin_id)
         remaining = (await db.execute(select(User.id).where(User.id.in_([student_id, admin_id])))).all()
         assert remaining == []
+
+
+class TestOrgDeleteKeepsRecords:
+    async def test_org_with_student_records_cannot_be_deleted(
+        self, delete_rbac, audit_to_test_db, db, mock_request, org, admin_user, regular_user, activity,
+    ):
+        # The org row cascades to every student's trail, so deleting it directly
+        # must be refused the same way the sole-admin account delete is.
+        from fastapi import HTTPException
+
+        from src.db.organizations import Organization
+        from src.services.orgs.orgs import delete_org
+        from src.services.trail.trail import add_activity_to_trail
+
+        org_id = org.id
+        await add_activity_to_trail(mock_request, regular_user, activity.activity_uuid, db)
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_org(mock_request, org_id, admin_user, db)
+        assert exc.value.status_code == 409
+        assert (await db.execute(select(Organization).where(Organization.id == org_id))).scalars().first()
+        assert await _audit_rows(db, regular_user.id, UserAuditEventType.ACTIVITY_COMPLETED)
 
 
 # ---------------------------------------------------------------------------

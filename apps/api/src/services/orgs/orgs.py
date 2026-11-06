@@ -863,6 +863,12 @@ async def delete_org(
     await rbac_check(request, org.org_uuid, current_user, "delete", db_session)
     await require_org_destroy_right(_acting_user_id(current_user), org.id, db_session)
 
+    # Rescue Ready fork: the record tables cascade on org delete, so deleting an
+    # org with student records would erase their official completion record.
+    from src.services.audit.record_retention import ensure_org_deletion_keeps_records
+
+    await ensure_org_deletion_keeps_records(db_session, org.id)
+
     # AUDIT LOG: Record the deletion for security audit trail
     user_id = current_user.id if hasattr(current_user, 'id') else 'unknown'
     logging.warning(

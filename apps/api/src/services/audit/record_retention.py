@@ -1,12 +1,12 @@
 """Rescue Ready fork: keep a student's official record from being erased by an
-account deletion.
+account or organization deletion.
 
 ``user_audit_event``, ``trailrun``, ``trailstep``, ``assignmentusersubmission``
 and ``certificateuser`` all reference ``user.id`` (and most ``organization.id``)
 with ``ON DELETE CASCADE``, so a hard delete of the user, or of an org, silently
 wipes the completion record. Rather than change those foreign keys (a migration
-against upstream's schema), the one hard-delete path refuses while records
-exist. Removing someone from the organization (membership only, nothing
+against upstream's schema), the hard-delete paths (account and org) refuse
+while records exist. Removing someone from the organization (membership only, nothing
 cascades) and anonymizing them (admin API; keeps the rows, scrubs the PII) stay
 available.
 
@@ -93,3 +93,15 @@ async def ensure_user_deletion_keeps_records(db_session: AsyncSession, user_id: 
                     "records must be kept. Add another admin to the organization first."
                 ),
             )
+
+
+async def ensure_org_deletion_keeps_records(db_session: AsyncSession, org_id: int) -> None:
+    """Raise 409 if deleting the organization would cascade away student records."""
+    if await org_has_records(db_session, org_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This organization has student course records, which are kept as the "
+                "official record, so it can't be deleted."
+            ),
+        )
