@@ -185,24 +185,20 @@ function EvaluateAssignment({ user_id }: any) {
         }
         setGradePreview(gradeRes.data);
         // Rescue Ready fork: a passing grade already completes the activity on
-        // the server, and a failing one must not. Calling the "mark as done"
-        // override here would complete a failed attempt, so stop at the grade.
+        // the server, and a failing one must not. The "mark as done" override
+        // is refused for assignments (it would complete a failed attempt), so
+        // it is not called; stop at the grade.
+        const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
+        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
         if (!gradeRes.data?.passed) {
             toast(t('dashboard.assignments.submissions.toasts.graded_not_passed', { defaultValue: 'Graded. The attempt did not pass, so the activity stays incomplete.' }))
-            const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
-            queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
             return
         }
-        // Rescue Ready fork: the passing grade has already completed the
-        // activity on the server; the separate "mark as done" override is now
-        // refused for assignments (owner decision), so it is no longer called.
         toast.success(t('dashboard.assignments.submissions.toasts.finalize_success'))
         track(AnalyticsEvent.SubmissionFinalized, {
             passed: gradeRes.data.passed,
             display_grade: gradeRes.data.display_grade,
         })
-        const rawUuid = assignmentUuid?.replace('assignment_', '') ?? ''
-        queryClient.invalidateQueries({ queryKey: queryKeys.assignments.allSubmissions(rawUuid) })
         queryClient.invalidateQueries({ queryKey: queryKeys.assignments.analytics(rawUuid) })
         queryClient.invalidateQueries({ queryKey: queryKeys.assignments.submission(rawUuid) })
     }

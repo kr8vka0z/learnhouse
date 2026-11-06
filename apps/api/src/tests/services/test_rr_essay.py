@@ -7,7 +7,6 @@ from students, and a CUSTOM task without the essay marker behaves as upstream.
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -23,7 +22,6 @@ from src.db.courses.assignments import (
     GradingTypeEnum,
 )
 from src.db.user_audit_events import UserAuditEventType
-from src.security.rbac import AccessAction
 from src.services.courses.activities.assignments import (
     create_assignment_submission,
     grade_assignment_submission,
@@ -31,30 +29,13 @@ from src.services.courses.activities.assignments import (
     read_assignment_task,
 )
 from src.services.courses.activities.essay import ESSAY_SNAPSHOT_MAX_CHARS
+from src.tests.services import test_rr_assignment_completion as _completion
 
-_A = "src.services.courses.activities.assignments."
+# Shared fixture. An assignment, not an import, so tests that take `env` as a
+# parameter don't trip ruff's F811 (redefinition of an unused import).
+env = _completion.env
 ESSAY_UUID = "assignmenttask_rr_essay"
 SHORT_UUID = "assignmenttask_rr_essay_short"
-
-
-@pytest.fixture
-def env(admin_user):
-    async def roles(request, user_id, action, *args, **kwargs):
-        return action == "read" or user_id == admin_user.id
-
-    async def resource_access(request, db_session, current_user, course_uuid, action):
-        if action == AccessAction.UPDATE and current_user.id != admin_user.id:
-            raise HTTPException(status_code=403, detail="forbidden")
-
-    with patch(_A + "authorization_verify_based_on_roles", side_effect=roles), \
-         patch(_A + "check_resource_access", side_effect=resource_access), \
-         patch(_A + "verify_activity_reader_access", new_callable=AsyncMock), \
-         patch(_A + "check_course_completion_and_create_certificate", new_callable=AsyncMock), \
-         patch(_A + "revoke_user_certificate", new_callable=AsyncMock), \
-         patch(_A + "track", new_callable=AsyncMock), \
-         patch(_A + "dispatch_webhooks", new_callable=AsyncMock), \
-         patch(_A + "record_audit_event", new_callable=AsyncMock) as audit:
-        yield {"audit": audit}
 
 
 async def _assignment(db, org, course, chapter, activity, contents, *, with_short=False):
